@@ -1,0 +1,22 @@
+# Render Blueprint (same pattern as ReportLens). Note: Render's free plan has 512 MB RAM
+# and sleeps after 15 min idle, which wipes stored videos. Hugging Face Spaces is the
+# recommended free host for this app (see DEPLOY.md).
+services:
+  - type: web
+    name: manim-studio
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_MODEL
+        value: openai/gpt-oss-120b
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: RENDER_MEMORY_MB
+        value: "450"
