@@ -2,10 +2,11 @@
 
 Two things live in this repo:
 
-1. **`scenes/`**: hand-written Manim animations that explain linear algebra for machine learning
-   (chapter 2 of *Deep Learning*, Goodfellow et al.). No LaTeX needed.
+1. **`scenes/`**: a few hand-written example Manim scenes. They are independent of the website,
+   which never reads them.
 2. **Manim Studio** (`server/` + `frontend/`): a website where you describe an animation in plain
-   English, an LLM (GPT-OSS-120B via Groq by default, swappable for Kimi/Qwen/DeepSeek) writes the Manim code, and the server renders
+   English, an LLM translates it into Manim code (a chain of free providers: Gemini 3.8 Flash first, then
+   Gemma 4 on NVIDIA, GLM on Z.ai, Qwen on OVHcloud), and the server renders
    the video. Videos go into folders in a side panel and are kept for 1 hour after you leave,
    with no account or database. See **[PLAN.md](PLAN.md)** for the design and roadmap.
 
@@ -26,20 +27,20 @@ uv run manim -pqh scenes\inverse.py UndoA     # one scene in HD
 
 | File | Topic |
 |---|---|
-| `scenes/column_space.py` | Column space, span, linear dependence (§2.4) |
-| `scenes/inverse.py` | How the inverse A⁻¹ works, determinant (§2.3) |
-| `scenes/norms.py` | Norms and the dot product (§2.5) |
-| `scenes/eigen.py` | Eigendecomposition (§2.7) |
-| `scenes/special_matrices.py` | Special matrices and vectors (§2.6) |
-| `scenes/ml_students.py` | Why ML needs all of this: predicting grades with X w = y |
+| `scenes/column_space.py` | Column space, span, linear dependence |
+| `scenes/inverse.py` | How the inverse A⁻¹ works, determinant |
+| `scenes/norms.py` | Norms and the dot product |
+| `scenes/eigen.py` | Eigendecomposition |
+| `scenes/special_matrices.py` | Special matrices and vectors |
+| `scenes/ml_students.py` | Predicting grades with X w = y |
 
 ## Run Manim Studio locally
 
-Get a free API key at <https://console.groq.com/keys> (or OpenRouter, see `.env.example`).
+Copy `.env.example` to `.env` and fill in the free keys (Gemini, NVIDIA, Z.ai). With no keys at all
+it still works through the keyless OVHcloud fallback, just slower.
 
 ```powershell
-# terminal 1: backend on :8000
-$env:LLM_API_KEY = "gsk_..."
+# terminal 1: backend on :8000 (reads keys from .env)
 uv run uvicorn server.main:app --reload --reload-dir server
 
 # terminal 2: frontend dev server on :5173 (proxies /api to :8000)
@@ -53,7 +54,7 @@ Open <http://localhost:5173>. Or build once (`cd frontend; npm run build`) and u
 
 ```powershell
 docker build -t manim-studio .
-docker run -p 7860:7860 -e LLM_API_KEY=gsk_... manim-studio   # → http://localhost:7860
+docker run -p 7860:7860 --env-file .env manim-studio   # → http://localhost:7860
 ```
 
 ## Deploy (public URL)
@@ -70,7 +71,7 @@ Redeploy after changes:
 
 ```powershell
 cd frontend; npm run build; cd ..
-$env:HF_TOKEN = "hf_..."; $env:LLM_API_KEY = "gsk_..."
+$env:HF_TOKEN = "hf_..."   # AI keys are read from your .env
 uv run --with huggingface_hub python deploy/hf_deploy.py Tacious/manim-studio
 ```
 
@@ -84,7 +85,8 @@ server/
   main.py           FastAPI routes + serves frontend/dist
   storage.py        cookie sessions, per-session folders on disk, 1 h TTL cleanup
   jobs.py           queue: LLM → safety check → render → auto-fix → save
-  llm.py            OpenAI-compatible client (Groq / OpenRouter / Ollama…)
+  llm.py            free-provider chain with automatic fallback (Gemini → NVIDIA → Z.ai → OVHcloud)
+  kit/studio_kit.py layout-safe helpers the AI uses (matrices, captions, worked equations, plots)
   prompts.py        system / fix prompts for the model
   sandbox.py        static code checks + sandboxed subprocess render
   render_runner.py  runs inside the subprocess (audit hook, length cap)

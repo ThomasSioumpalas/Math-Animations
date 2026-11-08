@@ -34,7 +34,7 @@ export default function VideoView({ video, folders, onRename, onMove, onDelete, 
     <div className="view">
       <header className="view-head">
         <div className="grow">
-          <div className="eyebrow">{new Date(video.created_at * 1000).toLocaleString()} · {video.quality === 'medium' ? '720p' : '480p'}</div>
+          <div className="eyebrow">{new Date(video.created_at * 1000).toLocaleString()} · {video.quality === 'medium' ? '720p' : '480p'}{video.model ? ` · made with ${video.model}` : ''}</div>
           {editing ? (
             <input className="title-input" autoFocus value={title} maxLength={80}
               onChange={(e) => setTitle(e.target.value)} onBlur={saveTitle}

@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs
+from . import config, jobs, llm
 from .storage import DEFAULT_FOLDER_ID, SID_RE, new_id, new_session_id, store
 
 
@@ -20,8 +20,7 @@ async def lifespan(_: FastAPI):
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
     store.cleanup()
     store.start_cleanup_thread()
-    print(f"[startup] model={config.LLM_MODEL} base={config.LLM_BASE_URL} "
-          f"key={'set' if config.LLM_API_KEY else 'MISSING'} latex={config.LATEX_AVAILABLE} "
+    print(f"[startup] providers={[f'{p[0]}:{p[3]}' for p in config.ACTIVE_PROVIDERS]} latex={config.LATEX_AVAILABLE} "
           f"ttl={config.SESSION_TTL_SECONDS}s", flush=True)
     yield
 
@@ -91,13 +90,13 @@ class GenerateIn(BaseModel):
 # ---------------------------------------------------------------- routes ------
 @app.get("/api/health")
 def health():
-    return {"ok": True, "model": config.LLM_MODEL, "llm_configured": bool(config.LLM_API_KEY),
-            "latex": config.LATEX_AVAILABLE}
+    return {"ok": True, "providers": llm.status(), "latex": config.LATEX_AVAILABLE}
 
 
 @app.get("/api/config")
 def public_config():
-    return {"model": config.LLM_MODEL, "allow_hd": config.ALLOW_HD, "max_prompt_chars": config.MAX_PROMPT_CHARS,
+    chain = config.ACTIVE_PROVIDERS
+    return {"model": chain[0][3] if chain else "none", "allow_hd": config.ALLOW_HD, "max_prompt_chars": config.MAX_PROMPT_CHARS,
             "ttl_seconds": config.SESSION_TTL_SECONDS, "latex": config.LATEX_AVAILABLE}
 
 

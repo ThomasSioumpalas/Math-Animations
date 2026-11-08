@@ -3,12 +3,12 @@ import { ArrowUp, LoaderCircle, Sparkles } from 'lucide-react'
 import type { Folder, PublicConfig } from '../api'
 
 const EXAMPLES = [
-  { label: 'Matrix as a transformation', prompt: 'Show how the 2x2 matrix [[1, 1], [0, 1]] (a shear) transforms the plane: draw the grid and the basis vectors i-hat and j-hat, then smoothly apply the matrix and show where i-hat and j-hat land. Finish by writing the determinant and explaining that area is preserved.' },
-  { label: 'Gradient descent', prompt: 'Explain gradient descent on f(x) = (x - 2)^2 + 1. Plot the curve, place a ball at x = -2, then take 8 steps with learning rate 0.3, drawing the tangent line at each step and a short caption with the current x and f(x). End with the ball at the minimum.' },
-  { label: 'Pythagorean theorem', prompt: 'Prove the Pythagorean theorem visually: draw a right triangle with sides 3, 4, 5, build squares on each side colored blue, green and yellow, show their areas 9, 16 and 25, then animate the two small squares\' areas combining into the large one.' },
-  { label: 'Fourier series', prompt: 'Animate a Fourier series approximating a square wave: add the first 1, 3, 5 and 10 odd harmonics one at a time on the same axes, showing the partial sum getting closer to the square wave. Label how many terms are used.' },
-  { label: 'Eigenvectors', prompt: 'Explain eigenvectors with A = [[2, 1], [1, 2]]: show several vectors on a grid, apply A, and highlight that only the vectors along y = x and y = -x stay on their own line, stretched by 3 and 1. Caption each step.' },
-  { label: 'Neural network forward pass', prompt: 'Visualize a forward pass through a tiny neural network with 3 inputs, a hidden layer of 4 neurons and 2 outputs. Draw neurons as circles and weights as lines, then animate the signal flowing layer by layer with neurons lighting up by their activation.' },
+  { label: 'Bouncing ball', prompt: 'A red ball drops from the top of the screen onto a floor line and bounces three times, each bounce lower than the last, then rolls to the right and stops.' },
+  { label: 'Sorting algorithm', prompt: 'Visualize bubble sort on the bars [5, 2, 8, 1, 9, 3]. Highlight the two bars being compared in yellow, swap them with a short animation when needed, and color each bar green once it is in its final position.' },
+  { label: 'Function graph', prompt: 'Draw axes from -4 to 4, plot y = sin(x) in blue, then morph it into y = 2·sin(x) and finally into y = sin(2x). Label each curve with its formula.' },
+  { label: 'Solar system', prompt: 'A yellow sun in the center with three planets of different sizes and colors orbiting it on circular paths at different speeds. Show the orbit paths as faint dashed circles.' },
+  { label: 'Pie chart', prompt: 'Build a pie chart of the shares 40% Rent, 25% Food, 20% Transport, 15% Other. Each slice grows in one after the other with its own color and label.' },
+  { label: 'Shape morph', prompt: 'A blue square rotates once, morphs into a green circle, then into an orange triangle, and finally shrinks to a point and fades out.' },
 ]
 
 type Props = {
@@ -43,9 +43,9 @@ export default function Composer(p: Props) {
   return (
     <div className="composer-wrap">
       <div className="hero">
-        <div className="badge"><Sparkles size={14} /> Text to math animation</div>
+        <div className="badge"><Sparkles size={14} /> Text to animation</div>
         <h1>What should we animate?</h1>
-        <p>Describe a concept, a proof or an algorithm. The AI writes the Manim code, renders it, and fixes its own errors.</p>
+        <p>Describe what you want to see, in as much detail as you like. The AI translates it into Manim code, renders the video, and fixes its own errors.</p>
       </div>
 
       <form
@@ -61,7 +61,7 @@ export default function Composer(p: Props) {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canSend) { e.preventDefault(); p.onSubmit() }
           }}
-          placeholder="e.g. Show how a 2×2 matrix stretches and rotates the plane, step by step, with the basis vectors highlighted…"
+          placeholder="Describe the animation you want: what appears, how it moves, colors, labels, order of steps…"
           rows={5}
         />
         <div className="composer-bar">
@@ -82,7 +82,7 @@ export default function Composer(p: Props) {
           </button>
         </div>
       </form>
-      <div className="hint">Tip: be specific. Name the steps, the numbers and the colors. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to send.{p.config && <> Model: <code>{p.config.model}</code></>}</div>
+      <div className="hint">Tip: be specific. Name the steps, the numbers and the colors. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to send.{p.config && <> Model: <code>{p.config.model}</code> + free fallbacks</>}</div>
 
       <div className="examples">
         <div className="examples-title">Try an example</div>

@@ -19,7 +19,8 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config
@@ -30,7 +31,7 @@ ALLOWED_MODULES = {
     "manim", "numpy", "math", "cmath", "random", "itertools", "functools", "operator",
     "colorsys", "typing", "dataclasses", "collections", "fractions", "decimal",
     "statistics", "string", "enum", "copy", "abc", "__future__", "scipy", "networkx",
-    "textwrap",
+    "textwrap", "studio_kit",
 }
 
 BLOCKED_NAMES = {
@@ -128,6 +129,7 @@ class RenderResult:
     video: Path | None
     error: str
     seconds: float
+    warnings: list = field(default_factory=list)  # layout problems found while rendering
 
 
 QUALITY = {"low": "low_quality", "medium": "medium_quality", "high": "high_quality"}
@@ -194,8 +196,14 @@ def render(code: str, work: Path, quality: str = "low") -> RenderResult:
 
     log = out.decode("utf-8", "replace")
     m = re.search(r"^__VIDEO__=(.+)$", log, re.M)
+    warnings: list[str] = []
+    for line in re.findall(r"^__LAYOUT__=(.+)$", log, re.M):
+        try:
+            warnings.extend(json.loads(line))
+        except ValueError:
+            pass
     if proc.returncode == 0 and m and Path(m.group(1).strip()).is_file():
-        return RenderResult(True, Path(m.group(1).strip()), "", time.time() - t0)
+        return RenderResult(True, Path(m.group(1).strip()), "", time.time() - t0, warnings[:12])
     if proc.returncode and proc.returncode < 0:
         log += f"\n(renderer killed by signal {-proc.returncode}; probably out of memory or CPU time)"
     return RenderResult(False, None, _trim_log(log), time.time() - t0)

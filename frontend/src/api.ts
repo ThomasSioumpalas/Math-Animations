@@ -8,6 +8,8 @@ export type Video = {
   quality: string
   created_at: number
   attempts: number
+  model?: string
+  layout_notes?: string[]
 }
 
 export type JobStatus = 'queued' | 'writing' | 'rendering' | 'fixing' | 'done' | 'failed'

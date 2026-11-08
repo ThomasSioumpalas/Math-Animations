@@ -8,3 +8,5 @@ frontend/dist/
 .env
 .env.*
 !.env.example
+.scenes
+

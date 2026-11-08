@@ -5,7 +5,7 @@ on ZeroGPU. hf_space/app.py runs our FastAPI app inside that Space (see its docs
 
     cd frontend; npm run build; cd ..            # the Space has no Node, so ship the built UI
     $env:HF_TOKEN = "hf_..."                     # https://huggingface.co/settings/tokens (write)
-    $env:LLM_API_KEY = "gsk_..."                 # https://console.groq.com/keys
+    # AI keys are read from your local .env (GEMINI_API_KEY, NVIDIA_API_KEY, ZAI_API_KEY)
     uv run --with huggingface_hub python deploy/hf_deploy.py <hf-username>/manim-studio
 
 Add --docker to deploy the Dockerfile instead (needs HF PRO).
@@ -36,7 +36,7 @@ colorFrom: indigo
 colorTo: yellow
 {sdk}
 pinned: false
-short_description: Describe a math idea, get a Manim animation video
+short_description: Describe any visualization, get a Manim video
 ---
 
 # Manim Studio
@@ -46,11 +46,22 @@ Source: https://github.com/ThomasSioumpalas/Math-Animations
 """
 
 VARIABLES = {
-    "LLM_BASE_URL": os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1"),
-    "LLM_MODEL": os.getenv("LLM_MODEL", "openai/gpt-oss-120b"),
     "COOKIE_SECURE": "true",
     "RENDER_WORKERS": "2",
 }
+SECRETS = ("GEMINI_API_KEY", "NVIDIA_API_KEY", "ZAI_API_KEY")
+REMOVED = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")  # old Groq setup
+
+
+def _dotenv() -> dict:
+    env = {}
+    path = ROOT / ".env"
+    if path.is_file():
+        for line in path.read_text("utf-8").splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
 
 
 def main() -> None:
@@ -70,11 +81,19 @@ def main() -> None:
         api.create_repo(repo_id, repo_type="space", space_sdk="docker", exist_ok=True)
     print(f"space ready ({mode})")
 
-    if key := os.getenv("LLM_API_KEY"):
-        api.add_space_secret(repo_id, "LLM_API_KEY", key)
-        print("secret LLM_API_KEY set")
-    else:
-        print("LLM_API_KEY not set here: add it in the Space settings → Secrets.")
+    local = _dotenv()
+    for name in SECRETS:
+        if value := (os.getenv(name) or local.get(name)):
+            api.add_space_secret(repo_id, name, value)
+            print(f"secret {name} set")
+        else:
+            print(f"{name} not found locally (Space keeps its current value, if any)")
+    for name in REMOVED:
+        for remove in (api.delete_space_secret, api.delete_space_variable):
+            try:
+                remove(repo_id, name)
+            except Exception:
+                pass
     for k, v in VARIABLES.items():
         api.add_space_variable(repo_id, k, v)
 
@@ -84,10 +103,10 @@ def main() -> None:
         if mode == "gradio":
             for name in ("app.py", "requirements.txt", "packages.txt"):
                 (stage / name).write_bytes((ROOT / "hf_space" / name).read_bytes())
-            patterns = ["server/*.py", "frontend/dist/**"]
+            patterns = ["server/*.py", "server/kit/*.py", "frontend/dist/**"]
         else:
             patterns = ["Dockerfile", ".dockerignore", "pyproject.toml", "uv.lock", ".python-version",
-                        "server/*.py", "frontend/*.json", "frontend/*.ts", "frontend/index.html",
+                        "server/*.py", "server/kit/*.py", "frontend/*.json", "frontend/*.ts", "frontend/index.html",
                         "frontend/public/**", "frontend/src/**"]
         api.upload_folder(repo_id=repo_id, repo_type="space", folder_path=ROOT, allow_patterns=patterns,
                           ignore_patterns=["**/node_modules/**", "**/__pycache__/**"],
@@ -96,7 +115,7 @@ def main() -> None:
                           commit_message="Deploy Manim Studio (space config)")
 
     owner, name = repo_id.split("/")
-    print(f"\nBuilding… (first build takes ~5-15 min because of LaTeX)\n"
+    print(f"\nBuilding... (first build takes ~5-15 min because of LaTeX)\n"
           f"  Space page : https://huggingface.co/spaces/{repo_id}\n"
           f"  Public URL : https://{owner.lower()}-{name.lower().replace('_', '-')}.hf.space")
 

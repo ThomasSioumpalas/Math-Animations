@@ -29,6 +29,9 @@ class Job:
     error: str = ""
     video_id: str | None = None
     title: str = ""
+    provider: str = ""
+    model: str = ""
+    layout_notes: list = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
 
@@ -71,7 +74,7 @@ def check_limits(sid: str) -> str | None:
         mine = [j for j in _jobs.values() if j.sid == sid]
     if sum(j.status in ACTIVE for j in mine) >= config.MAX_ACTIVE_JOBS_PER_SESSION:
         return "You already have animations in progress. Wait for one to finish."
-    if sum(j.created_at > hour_ago for j in mine) >= config.MAX_JOBS_PER_SESSION_PER_HOUR:
+    if config.MAX_JOBS_PER_SESSION_PER_HOUR and sum(j.created_at > hour_ago for j in mine) >= config.MAX_JOBS_PER_SESSION_PER_HOUR:
         return "Hourly limit reached for this browser. Please try again later."
     if len(store.get(sid)["videos"]) >= config.MAX_VIDEOS_PER_SESSION:
         return "Storage full: delete some videos first."
@@ -104,15 +107,22 @@ def _set(job: Job, **kw) -> None:
         setattr(job, k, v)
 
 
+def _ask(job: Job, user_content: str, temperature: float) -> str:
+    reply = llm.chat([
+        {"role": "system", "content": prompts.system_prompt()},
+        {"role": "user", "content": user_content},
+    ], temperature=temperature, prefer=job.provider or None)
+    job.provider, job.model = reply.provider, reply.model
+    return sandbox.extract_code(reply.text)
+
+
 def _run(job: Job) -> None:
     work = config.WORK_DIR / job.id
+    best = config.WORK_DIR / f"{job.id}_best.mp4"   # rendered video that only has layout warnings
+    best_code, best_notes = "", []
     try:
-        _set(job, status="writing", message="AI is writing the Manim code…", attempt=1)
-        reply = llm.chat([
-            {"role": "system", "content": prompts.system_prompt()},
-            {"role": "user", "content": prompts.user_prompt(job.prompt)},
-        ])
-        code = sandbox.extract_code(reply)
+        _set(job, status="writing", message="AI is planning the storyboard and writing the Manim code…", attempt=1)
+        code = _ask(job, prompts.user_prompt(job.prompt), 0.4)
 
         for attempt in range(1, job.max_attempts + 1):
             job.code, job.attempt = code, attempt
@@ -124,20 +134,31 @@ def _run(job: Job) -> None:
                 _set(job, status="rendering",
                      message="Rendering video…" if attempt == 1 else f"Rendering fixed version ({attempt}/{job.max_attempts})…")
                 result = sandbox.render(code, work, job.quality)
-                if result.ok and result.video:
+                if result.ok and result.video and not result.warnings:
+                    job.layout_notes = []
                     _save(job, result.video)
                     return
-                error = result.error
+                if result.ok and result.video:
+                    # Rendered, but text overlaps / leaves the screen: keep it as a fallback and ask for a fix.
+                    if not best_code or len(result.warnings) <= len(best_notes):
+                        shutil.copyfile(result.video, best)
+                        best_code, best_notes = code, result.warnings
+                    error = ("The video rendered, but the automatic layout check found these problems. "
+                             "Fix them by repositioning, resizing or fading out objects (use the studio_kit "
+                             "zones):\n- " + "\n- ".join(result.warnings))
+                else:
+                    error = result.error
             job.error = error
             if attempt == job.max_attempts:
                 break
-            _set(job, status="fixing", message=f"Render failed, AI is fixing the code (attempt {attempt + 1}/{job.max_attempts})…")
-            reply = llm.chat([
-                {"role": "system", "content": prompts.system_prompt()},
-                {"role": "user", "content": prompts.fix_prompt(job.prompt, code, error)},
-            ], temperature=0.2)
-            code = sandbox.extract_code(reply)
+            _set(job, status="fixing", message=f"Improving the video (attempt {attempt + 1}/{job.max_attempts})…")
+            code = _ask(job, prompts.fix_prompt(job.prompt, code, error), 0.2)
 
+        if best_code:
+            job.code, job.layout_notes = best_code, best_notes
+            job.title = sandbox.extract_title(best_code, job.prompt)
+            _save(job, best)
+            return
         _set(job, status="failed", message="Could not produce a working animation. Try rephrasing or simplifying.")
     except llm.LLMError as e:
         _set(job, status="failed", message=str(e), error=str(e))
@@ -146,6 +167,7 @@ def _run(job: Job) -> None:
     finally:
         job.finished_at = job.finished_at or time.time()
         shutil.rmtree(work, ignore_errors=True)
+        best.unlink(missing_ok=True)
         store.unpin(job.sid)
 
 
@@ -163,5 +185,7 @@ def _save(job: Job, video_path) -> None:
             "quality": job.quality,
             "created_at": time.time(),
             "attempts": job.attempt,
+            "model": f"{job.provider} · {job.model}" if job.provider else "",
+            "layout_notes": job.layout_notes,
         })
     _set(job, status="done", message="Done!", video_id=vid, error="", finished_at=time.time())

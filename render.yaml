@@ -10,12 +10,12 @@ services:
     autoDeploy: true
     healthCheckPath: /api/health
     envVars:
-      - key: LLM_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
-      - key: LLM_BASE_URL
-        value: https://api.groq.com/openai/v1
-      - key: LLM_MODEL
-        value: openai/gpt-oss-120b
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: ZAI_API_KEY
+        sync: false
       - key: COOKIE_SECURE
         value: "true"
       - key: RENDER_MEMORY_MB

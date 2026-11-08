@@ -109,6 +109,112 @@ def main() -> int:
 
         setattr(Scene, name, capped)
 
+    # Layout check: after every play(), find visible text that leaves the frame or overlaps
+    # other text. Findings are reported back so the AI can fix them in another round.
+    import json
+    from manim import MarkupText, SingleStringMathTex, Text
+
+    text_types = (Text, MarkupText, SingleStringMathTex)
+    issues: dict[str, str] = {}
+    half_w, half_h = config.frame_width / 2, config.frame_height / 2
+
+    def _label(m) -> str:
+        s = getattr(m, "original_text", None) or getattr(m, "text", None) or getattr(m, "tex_string", None) or type(m).__name__
+        s = " ".join(str(s).split())
+        return s if len(s) <= 40 else s[:37] + "..."
+
+    def _visible(m) -> bool:
+        return any(sm.get_fill_opacity() > 0.15 or sm.get_stroke_opacity() > 0.15
+                   for sm in m.family_members_with_points())
+
+    from manim import SurroundingRectangle
+
+    rect_first_seen: dict[int, float] = {}
+
+    def _name(m) -> str:
+        if getattr(m, "name", None) and type(m).__name__ == "NumberMatrix":
+            return f'matrix "{m.name}"'
+        if type(m).__name__ == "NumberMatrix":
+            return f"matrix {m.values.shape[0]}×{m.values.shape[1]}"
+        if type(m).__name__ == "DataPlot":
+            return "plot"
+        return f'text "{_label(m)}"'
+
+    def lint(scene) -> None:
+        cam = scene.camera
+        if type(cam).__name__.startswith("ThreeD"):
+            return
+        if hasattr(cam, "frame"):  # MovingCamera: use the camera frame's current bounds
+            cx, cy = cam.frame.get_center()[:2]
+            hw, hh = cam.frame.width / 2, cam.frame.height / 2
+        else:
+            cx, cy, hw, hh = 0.0, 0.0, half_w, half_h
+        kit = sys.modules.get("studio_kit")
+        block_types = tuple(c for c in (getattr(kit, "NumberMatrix", None), getattr(kit, "DataPlot", None)) if c)
+        t = getattr(scene.renderer, "time", 0)
+
+        # "Blocks": kit matrices/plots as a whole, plus every text not inside one.
+        blocks, inside = [], set()
+        rects = []
+        for top in scene.mobjects:
+            for m in top.get_family():
+                if id(m) in inside:
+                    continue
+                if block_types and isinstance(m, block_types):
+                    inside.update(id(sub) for sub in m.get_family()[1:])
+                    if _visible(m):
+                        blocks.append(m)
+                elif isinstance(m, text_types):
+                    inside.update(id(sub) for sub in m.get_family()[1:])
+                    if m.width > 1e-3 and _visible(m):
+                        blocks.append(m)
+                elif isinstance(m, SurroundingRectangle) and _visible(m):
+                    rects.append(m)
+
+        boxes = []
+        for m in blocks:
+            l, r, b, tp = m.get_left()[0], m.get_right()[0], m.get_bottom()[1], m.get_top()[1]
+            boxes.append((m, l, r, b, tp))
+            if l < cx - hw - 0.05 or r > cx + hw + 0.05 or b < cy - hh - 0.05 or tp > cy + hh + 0.05:
+                issues.setdefault(f"off:{_name(m)}", f"{_name(m)} goes off-screen at t={t:.0f}s")
+        for i in range(len(boxes)):
+            m1, l1, r1, b1, t1 = boxes[i]
+            for j in range(i + 1, len(boxes)):
+                m2, l2, r2, b2, t2 = boxes[j]
+                ow, oh = min(r1, r2) - max(l1, l2), min(t1, t2) - max(b1, b2)
+                if ow <= 0 or oh <= 0:
+                    continue
+                smaller = min((r1 - l1) * (t1 - b1), (r2 - l2) * (t2 - b2))
+                if ow * oh > 0.08 * smaller:
+                    key = f"ov:{_name(m1)}|{_name(m2)}"
+                    issues.setdefault(key, f"{_name(m1)} overlaps {_name(m2)} at t={t:.0f}s")
+
+        # Highlight rectangles must be removed after use.
+        live = {id(r) for r in rects}
+        for k in list(rect_first_seen):
+            if k not in live:
+                del rect_first_seen[k]
+        for r in rects:
+            first = rect_first_seen.setdefault(id(r), t)
+            if t - first > 12:
+                issues.setdefault(f"rect:{first:.0f}", f"a highlight rectangle created at t={first:.0f}s is still "
+                                                       f"on screen at t={t:.0f}s (FadeOut highlights right after use)")
+
+    original_play = Scene.play
+
+    def play_and_lint(self, *a, **kw):
+        result = original_play(self, *a, **kw)
+        try:
+            lint(self)
+        except Exception:
+            pass
+        return result
+
+    Scene.play = play_and_lint
+
+    # studio_kit (layout-safe helpers) is importable by the generated code.
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "kit"))
+
     code = compile(source, os.path.join(work, "scene.py"), "exec")
     install_hook(work, data_dir)
 
@@ -122,6 +228,8 @@ def main() -> int:
         apply_config()  # undo any config tweaks made at import time
         scene = cls()
         scene.render()
+        if issues:
+            print("__LAYOUT__=" + json.dumps(list(issues.values())[:12]), flush=True)
         print(f"__VIDEO__={scene.renderer.file_writer.movie_file_path}", flush=True)
         return 0
     except BaseException:
