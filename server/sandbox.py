@@ -126,6 +126,11 @@ def validate(code: str) -> list[str]:
             if name in ANIMATION_RETURNING or _is_animate_chain(node.value.func):
                 bad(node, f"'{name or '.animate'}(...)' only BUILDS an animation; on its own line it does nothing. "
                           f"Wrap it: self.play({ast.unparse(node.value)[:60]})")
+        if isinstance(node, ast.Call) and _call_name(node) == "play":
+            for arg in node.args:
+                if isinstance(arg, ast.Call) and _call_name(arg) in SELF_PLAYING and not _is_animate_chain(arg.func):
+                    bad(node, f"'{_call_name(arg)}(...)' animates by itself (Plane2D / Space3D methods play their own "
+                              f"animations). Call it directly, without self.play: {ast.unparse(arg)[:60]}")
     if not scene_found:
         problems.append(f"no class named {SCENE_NAME} was defined")
     return problems[:15]
@@ -133,10 +138,15 @@ def validate(code: str) -> list[str]:
 
 # studio_kit helpers the model must use, not re-implement (a re-implementation shadows the tested one)
 KIT_NAMES = {"clear_stage", "set_title", "fit_to", "Narrator", "NumberMatrix", "show_dot_product",
-             "transform_column", "animate_transpose", "work_text", "DataPlot", "show_matrix_product", "fmt"}
+             "transform_column", "animate_transpose", "work_text", "DataPlot", "show_matrix_product", "fmt",
+             "Plane2D", "Space3D", "hud", "boxed"}
 KIT_CALL_HINT = {"clear_stage": "clear_stage(self, *keep)", "set_title": "set_title(self, text)"}
 # Functions/methods that RETURN an animation which must be passed to self.play(...)
 ANIMATION_RETURNING = {"set_values", "set_cell", "move_dots", "animate_transpose"}
+# Plane2D / Space3D methods that PLAY their own animations (wrapping them in self.play() crashes)
+SELF_PLAYING = {"transform_space", "show_matrix", "add_unit_square", "add_unit_cube", "show_determinant",
+                "show_eigenvectors", "label_eigen_stretch", "show_combination", "show_off_span", "label_landings",
+                "reset_space", "add_points", "compose", "orbit", "clear_annotations", "add_vector"}
 
 
 def _call_name(call: ast.Call) -> str:
@@ -182,13 +192,13 @@ def _child_env(work: Path) -> dict[str, str]:
     return env
 
 
-def _limits() -> None:  # runs in the child before exec (Linux only)
+def _limits(timeout: int | None = None) -> None:  # runs in the child before exec (Linux only)
     import resource
 
     os.setsid()
     mem = config.RENDER_MEMORY_MB * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
-    cpu = config.RENDER_TIMEOUT_SECONDS + 10
+    cpu = (timeout or config.RENDER_TIMEOUT_SECONDS) + 10
     resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
     resource.setrlimit(resource.RLIMIT_FSIZE, (300 * 1024 * 1024, 300 * 1024 * 1024))
 
@@ -204,7 +214,7 @@ def kill(proc) -> None:
         pass
 
 
-def render(code: str, work: Path, quality: str = "low", on_start=None) -> RenderResult:
+def render(code: str, work: Path, quality: str = "low", on_start=None, timeout: int | None = None) -> RenderResult:
     """Render GeneratedScene from `code` inside `work`. Never raises."""
     t0 = time.time()
     if work.exists():
@@ -221,13 +231,13 @@ def render(code: str, work: Path, quality: str = "low", on_start=None) -> Render
     try:
         proc = subprocess.Popen(
             cmd, cwd=work, env=_child_env(work), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            preexec_fn=_limits if posix else None,
+            preexec_fn=(lambda: _limits(timeout)) if posix else None,
             creationflags=0 if posix else subprocess.CREATE_NEW_PROCESS_GROUP,
         )
         if on_start is not None:
             on_start(proc)
         try:
-            out, _ = proc.communicate(timeout=config.RENDER_TIMEOUT_SECONDS)
+            out, _ = proc.communicate(timeout=timeout or config.RENDER_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             if posix:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -235,7 +245,7 @@ def render(code: str, work: Path, quality: str = "low", on_start=None) -> Render
                 proc.kill()
             proc.communicate()
             return RenderResult(False, None,
-                                f"Render timed out after {config.RENDER_TIMEOUT_SECONDS}s. "
+                                f"Render timed out after {timeout or config.RENDER_TIMEOUT_SECONDS}s. "
                                 "Make the animation shorter / simpler.", time.time() - t0)
     except Exception as e:
         return RenderResult(False, None, f"Could not start renderer: {e}", time.time() - t0)

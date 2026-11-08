@@ -26,7 +26,7 @@ export default function App() {
   const [selection, setSelection] = useStored<Selection>('mstudio.selection', { kind: 'new' })
   const [draft, setDraft] = useStored('mstudio.draft', '')
   const [folderId, setFolderId] = useStored('mstudio.folder', 'general')
-  const [quality, setQuality] = useStored('mstudio.quality', 'low')
+  const [quality, setQuality] = useStored('mstudio.quality.v2', 'medium')
   const [submitting, setSubmitting] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])

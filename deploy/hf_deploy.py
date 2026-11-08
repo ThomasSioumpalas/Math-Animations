@@ -103,10 +103,10 @@ def main() -> None:
         if mode == "gradio":
             for name in ("app.py", "requirements.txt", "packages.txt"):
                 (stage / name).write_bytes((ROOT / "hf_space" / name).read_bytes())
-            patterns = ["server/*.py", "server/kit/*.py", "frontend/dist/**"]
+            patterns = ["server/*.py", "server/kit/*.py", "server/kit/fonts/*", "frontend/dist/**"]
         else:
             patterns = ["Dockerfile", ".dockerignore", "pyproject.toml", "uv.lock", ".python-version",
-                        "server/*.py", "server/kit/*.py", "frontend/*.json", "frontend/*.ts", "frontend/index.html",
+                        "server/*.py", "server/kit/*.py", "server/kit/fonts/*", "frontend/*.json", "frontend/*.ts", "frontend/index.html",
                         "frontend/public/**", "frontend/src/**"]
         api.upload_folder(repo_id=repo_id, repo_type="space", folder_path=ROOT, allow_patterns=patterns,
                           ignore_patterns=["**/node_modules/**", "**/__pycache__/**"],

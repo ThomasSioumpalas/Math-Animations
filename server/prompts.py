@@ -47,6 +47,57 @@ matrices, brackets, captions or titles.
   matrices in a row -> VGroup(...).arrange(RIGHT, buff=0.6) then fit_to(group, "main"). Fade out what
   is finished before showing the next big thing.
 
+SPACE VIEW (studio_kit): show matrices as TRANSFORMATIONS OF SPACE. This is the main picture for
+every linear algebra idea with a geometric meaning: matrix·vector, linear combinations, span, basis,
+transformations, composition/products, determinant, inverse, rank/column space/null space,
+eigenvectors/eigenvalues, change of basis, 2x2 or 3x3 systems. Numbers go in panels beside the geometry.
+All methods ANIMATE BY THEMSELVES: call them directly, never inside self.play(...).
+  2-D (normal Scene):
+  plane = Plane2D(self, matrices=[A, ...], vectors=[v, ...])   full-screen moving grid + faint fixed
+      reference grid + î (green) and ĵ (red). Pass every matrix/vector you will show: it sizes the grid.
+  plane.show_matrix(A, name="A", corner=UL)    panel: column 1 green (= where î lands), column 2 red (= ĵ)
+  v = plane.add_vector([3, -1], label="v")     yellow arrow; its label shows its CURRENT coordinates
+  plane.show_combination(v)                    v = x·î + y·ĵ drawn tip to tail (green piece, red piece)
+  plane.add_unit_square(); plane.show_determinant()   yellow unit square + LIVE "det = …" readout
+  plane.transform_space(A, run_time=3)         the whole plane moves; î, ĵ land on A's columns; lines
+                                               stay parallel and evenly spaced; det = 0 squishes it flat
+  plane.label_landings()                       "î lands on [a, c]", "ĵ lands on [b, d]"
+  plane.show_eigenvectors(A) -> [(λ, v)]       dashed span lines with vectors on them (call BEFORE
+                                               transform_space); [] means no real eigenvectors
+  plane.label_eigen_stretch()                  "stretched by λ" labels (call AFTER transform_space)
+  plane.show_off_span([1, 2])                  a vector that gets knocked off its own span line
+  plane.compose([(R, "R"), (S, "S")])          applies R then S, formula "S R" with the active matrix
+                                               highlighted, then the product matrix in one move
+  plane.reset_space()                          animate back to the original grid (impossible after det = 0:
+                                               make a new Plane2D after clear_stage instead)
+  plane.add_points(rows, color)                many vectors as points that move with the plane
+  plane.panel(mob, corner=UR)                  any worked numbers (e.g. a work line or NumberMatrix) on a
+                                               dark panel in a top corner; plane.coords_of(v) -> current coords
+  3-D (class GeneratedScene(ThreeDScene)):
+  space = Space3D(self, matrices=[A3])         lattice of lines, î green, ĵ red, k̂ blue, axes x y z
+  space.show_matrix(A3, name="A"); space.add_unit_cube(); space.show_determinant()
+  space.transform_space(A3)                    camera turns slowly during the move to show depth
+  space.label_landings(); space.add_vector([1, 2, 1], label="v"); space.orbit(60); space.reset_space()
+  In ThreeDScene, captions/titles/panels from studio_kit are pinned to the screen automatically; for any
+  other Text you show, call hud(self, mob) first, then FadeIn it.
+  Visual rules of the space view: keep the grid as the main picture (no big matrices in the middle of it);
+  show one transformation at a time and pause after it; say in captions what to look at ("watch where
+  the green arrow lands"); tie every number to the geometry with color (î green, ĵ red, k̂ blue).
+  Use 3-D only for 3x3 matrices or ideas that need depth; everything 2x2 stays in 2-D.
+
+SPACE VIEW EXAMPLE:
+    def step_transform(self):
+        A = np.array([[2, 1], [1, 3]], dtype=float)
+        plane = Plane2D(self, matrices=[A], vectors=[[3, -1]])
+        plane.show_matrix(A, name="A")
+        v = plane.add_vector([3, -1], label="v")
+        self.n.say("Any vector is a mix of î and ĵ: here v = 3·î − 1·ĵ.")
+        plane.show_combination(v)
+        self.n.say("Now apply A. Watch where the green and red arrows land.")
+        plane.transform_space(A)
+        plane.label_landings()
+        self.n.say("î landed on column 1 of A and ĵ on column 2, so v landed on 3·(column 1) − 1·(column 2).")
+
 CORRECT USAGE PATTERN (generic example: a per-column operation with every number shown):
     def step_example(self):
         clear_stage(self, self.plot)                      # keep the plot (its dots are kept too)
@@ -65,6 +116,7 @@ CORRECT USAGE PATTERN (generic example: a per-column operation with every number
 MISTAKES THE AUTOMATIC CHECKER REJECTS (your code will be sent back to you):
 - Calling M.set_values(...), M.set_cell(...), plot.move_dots(...), animate_transpose(...) or
   obj.animate... on its own line: they only BUILD animations. Always self.play(...) them.
+- Wrapping a Plane2D / Space3D method in self.play(...): they animate by themselves.
 - Defining your own clear_stage / set_title / fit_to / NumberMatrix / ... : use the kit's.
 - A result matrix that still shows "?" when it leaves the screen or at the end of the video.
 - Dots shown after their DataPlot was removed (keep the plot: clear_stage(self, plot)).
@@ -102,9 +154,10 @@ then write the code. In EXPLAIN mode the storyboard must contain:
   2. One step per operation, in order. For each: name it, show the formula, then the SAME formula
      with the real numbers substituted, then animate the numbers moving or changing into the result.
      Show every intermediate value (means, deviations, squares, sums, each matrix entry).
-  3. Geometric view whenever the data is 2-D (or one column against another): plot the points
-     with DataPlot and animate them moving as the transformation is applied (for example centering
-     moves the cloud to the origin, scaling squeezes or stretches it).
+  3. Geometric view. Linear algebra (matrices acting on vectors, transformations, determinants,
+     eigenvectors, ...): use the SPACE VIEW below as the main picture, in 2-D (Plane2D) or for 3x3
+     matrices in 3-D (Space3D). Data (rows = samples, e.g. centering or scaling a dataset): plot the
+     points with DataPlot and animate them moving as the transformation is applied.
   4. "What you might have missed": 1–3 short steps with the key facts and intuitions the user did
      not ask for but needs (what the result means, properties, common pitfalls, why it is used).
   5. Recap: the whole pipeline in 2–4 short lines.

@@ -78,7 +78,8 @@ LLM_DAILY_CALL_LIMIT = _int("LLM_DAILY_CALL_LIMIT", 0)  # 0 = no site-wide cap
 
 # --- rendering -----------------------------------------------------------------
 MAX_FIX_ATTEMPTS = _int("MAX_FIX_ATTEMPTS", 3)          # LLM repair rounds after a failed render
-RENDER_TIMEOUT_SECONDS = _int("RENDER_TIMEOUT_SECONDS", 600)
+RENDER_TIMEOUT_SECONDS = _int("RENDER_TIMEOUT_SECONDS", 600)          # 480p draft renders
+FINAL_RENDER_TIMEOUT_SECONDS = _int("FINAL_RENDER_TIMEOUT_SECONDS", 2400)  # the one 720p/1080p render
 RENDER_WORKERS = _int("RENDER_WORKERS", 1)               # parallel renders (CPU bound)
 MAX_VIDEO_SECONDS = _int("MAX_VIDEO_SECONDS", 360)
 RENDER_MEMORY_MB = _int("RENDER_MEMORY_MB", 3072)        # Linux only (RLIMIT_AS)

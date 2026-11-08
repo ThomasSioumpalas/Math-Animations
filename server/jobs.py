@@ -168,12 +168,12 @@ def _run(job: Job) -> None:
                 _check(job)
                 _set(job, status="rendering",
                      message="Rendering video…" if attempt == 1 else f"Rendering fixed version ({attempt}/{job.max_attempts})…")
-                result = sandbox.render(code, work, job.quality, on_start=lambda p: _track(job, p))
+                result = sandbox.render(code, work, "low", on_start=lambda p: _track(job, p))
                 _procs.pop(job.id, None)
                 _check(job)
                 if result.ok and result.video and not result.warnings:
                     job.layout_notes = []
-                    _save(job, result.video)
+                    _save(job, _final_render(job, code, result.video))
                     return
                 if result.ok and result.video:
                     # Rendered, but text overlaps / leaves the screen: keep it as a fallback and ask for a fix.
@@ -196,7 +196,7 @@ def _run(job: Job) -> None:
         if best_code:
             job.code, job.layout_notes = best_code, best_notes
             job.title = sandbox.extract_title(best_code, job.prompt)
-            _save(job, best)
+            _save(job, _final_render(job, best_code, best))
             return
         _set(job, status="failed", message="Could not produce a working animation. Try rephrasing or simplifying.")
     except _Cancelled:
@@ -211,8 +211,29 @@ def _run(job: Job) -> None:
         _procs.pop(job.id, None)
         job.finished_at = job.finished_at or time.time()
         shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(config.WORK_DIR / f"{job.id}_final", ignore_errors=True)
         best.unlink(missing_ok=True)
         store.unpin(job.sid)
+
+
+def _final_render(job: Job, code: str, draft):
+    """Drafts render at 480p so fix rounds stay fast; the version that passed every check is rendered
+    once more at the quality the user picked. If that fails for any reason, the 480p draft is kept."""
+    if job.quality == "low":
+        return draft
+    _check(job)
+    label = {"medium": "720p", "high": "1080p"}.get(job.quality, job.quality)
+    _set(job, status="rendering", message=f"All checks passed. Rendering the final {label} version…")
+    final_work = config.WORK_DIR / f"{job.id}_final"
+    result = sandbox.render(code, final_work, job.quality, on_start=lambda p: _track(job, p),
+                            timeout=config.FINAL_RENDER_TIMEOUT_SECONDS)
+    _procs.pop(job.id, None)
+    _check(job)
+    if result.ok and result.video:
+        return result.video
+    print(f"[jobs] final {label} render failed, keeping the 480p draft: {result.error[-300:]}", flush=True)
+    job.quality = "low"
+    return draft
 
 
 def _save(job: Job, video_path) -> None:

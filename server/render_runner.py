@@ -80,7 +80,8 @@ def main() -> int:
     with open(os.path.join(work, "scene.py"), encoding="utf-8") as f:
         source = f.read()
 
-    import manim  # noqa: F401  (heavy import before the hook)
+    import manim  # noqa: F401  (heavy imports before the hook)
+    import scipy.linalg  # noqa: F401  (used by studio_kit's space view)
     from manim import Scene, config
 
     def apply_config() -> None:
@@ -168,7 +169,8 @@ def main() -> int:
                     inside.update(id(sub) for sub in m.get_family()[1:])
                     if m.width > 1e-3 and _visible(m):
                         blocks.append(m)
-                elif isinstance(m, SurroundingRectangle) and _visible(m):
+                elif isinstance(m, SurroundingRectangle) and _visible(m) and m.get_fill_opacity() < 0.3:
+                    # (filled rectangles are panel backgrounds, not highlights)
                     rects.append(m)
 
         boxes = []

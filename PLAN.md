@@ -84,7 +84,19 @@ server's API key" must not work. Defences in this repo:
 This is solid for a free demo but **not a hard security boundary** (Python audit hooks are not
 designed as one). Before real traffic, see roadmap item R3.
 
-## 6. Roadmap: changes for later
+## 6. Visual language for linear algebra
+
+Videos about matrices show them as **transformations of space**, following the conventions of the best
+linear algebra animations: a full-screen grid that moves while a faint copy of the original grid stays
+behind; grid lines stay parallel and evenly spaced and the origin stays fixed; î green, ĵ red, k̂ blue;
+a matrix's columns are colored like the basis vectors because column j is where basis vector j lands;
+the yellow unit square/cube's signed area/volume is the determinant; eigenvectors are shown as families
+of vectors that stay on their dashed span lines. This lives in `server/kit/studio_space.py` (`Plane2D`,
+`Space3D`), and all text uses Computer Modern (CMU Serif, bundled under the SIL Open Font License).
+Videos default to 720p: drafts render at 480p for fast checks, and only the version that passed is
+rendered again at 720p. Captions carry the explanation (no voice-over, by choice).
+
+## 7. Roadmap: changes for later
 
 **Persistence and accounts**
 - **R0. Hosting backup.** If HF changes the free ZeroGPU terms, the best free fallbacks are
@@ -122,3 +134,10 @@ designed as one). Before real traffic, see roadmap item R3.
 - **R10. Model picker** in the UI on top of the provider chain (already has automatic fallback)
   when one provider is rate-limited.
 - **R11. HD rendering** (1080p) for signed-in users only, once there is a worker queue.
+- **R12. Interactive space viewer (next phase).** Beside every linear algebra video, an in-browser
+  viewer that shows the same 2-D grid or 3-D lattice live: drag to rotate 3-D space, scrub the
+  transformation with a slider, type your own matrix, toggle eigenvectors / unit square / det readout.
+  Same visual conventions as the videos (î green, ĵ red, k̂ blue, columns colored like the basis).
+- **R13. Model benchmark in CI.** `evals/model_eval.py` measures math reasoning (auto-checked answers)
+  and video translation (first-try success, fix rounds, layout problems) per free model; rerun it when
+  providers add models, and order the provider chain by the results.

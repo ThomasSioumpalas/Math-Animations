@@ -13,19 +13,38 @@ never pile on top of each other:
 """
 from __future__ import annotations
 
+import os
 import textwrap
 
+import manimpango
 import numpy as np
 from manim import (
-    BLUE, DOWN, GREEN, GREY_B, LEFT, ORIGIN, RIGHT, UP, WHITE, YELLOW,
-    AnimationGroup, Axes, Create, Dot, FadeIn, FadeOut, Line, Mobject, Scene,
-    SurroundingRectangle, Text, Transform, TransformFromCopy, VGroup, VMobject, Write,
+    BLACK, BLUE, DOWN, GREEN, GREY_B, LEFT, ORIGIN, RIGHT, UP, WHITE, YELLOW,
+    AnimationGroup, Axes, Create, Dot, FadeIn, FadeOut, Line, MarkupText, Mobject, Scene,
+    SurroundingRectangle, Text, ThreeDScene, Transform, TransformFromCopy, VGroup, VMobject, Write,
 )
+
+# Typeset everything in Computer Modern (the classic LaTeX look) without needing LaTeX:
+# the CMU Serif fonts (SIL Open Font License) ship next to this file. Only on Linux (the server):
+# on Windows, Pango needs ~7 s per new string with runtime-registered fonts, so local test renders
+# keep the default font.
+_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+FONT = ""
+if not os.name == "nt":
+    for _f in ("cmunrm.otf", "cmunbx.otf", "cmunti.otf", "cmunbi.otf"):
+        try:
+            manimpango.register_font(os.path.join(_FONT_DIR, _f))
+        except Exception:
+            pass
+    FONT = "CMU Serif" if "CMU Serif" in manimpango.list_fonts() else ""
+if FONT:
+    Text.set_default(font=FONT)
+    MarkupText.set_default(font=FONT)
 
 __all__ = [
     "ZONES", "fmt", "fit_to", "set_title", "Narrator", "NumberMatrix", "show_dot_product",
     "transform_column", "animate_transpose", "work_text", "DataPlot", "clear_stage",
-    "show_matrix_product",
+    "show_matrix_product", "hud", "boxed", "Plane2D", "Space3D", "I_COLOR", "J_COLOR", "K_COLOR",
 ]
 
 # id(DataPlot) -> dot groups made by plot.dots(); kept at module level so it is never deep-copied
@@ -63,13 +82,30 @@ def fit_to(mob: Mobject, zone: str = "main") -> Mobject:
     return mob.move_to(center)
 
 
+def hud(scene: Scene, *mobs: Mobject):
+    """Pin mobjects to the screen. Needed for text and panels in 3-D scenes (otherwise they
+    rotate with the camera); does nothing in 2-D. Call it BEFORE FadeIn/Write."""
+    if isinstance(scene, ThreeDScene) and mobs:
+        scene.add_fixed_in_frame_mobjects(*mobs)
+        scene.remove(*mobs)
+    return mobs[0] if len(mobs) == 1 else VGroup(*mobs)
+
+
+def boxed(text: str, color=WHITE, font_size: int = 28, opacity: float = 0.8) -> Text:
+    """Text on a dark box, readable on top of grids and moving shapes."""
+    t = Text(text, font_size=font_size, color=color)
+    t.add_background_rectangle(color=BLACK, opacity=opacity, buff=0.1)
+    return t
+
+
 def _wrap(text: str, width: int) -> str:
     return "\n".join(textwrap.fill(p, width) for p in text.split("\n"))
 
 
 def set_title(scene: Scene, text: str, font_size: int = 34, color=WHITE) -> Text:
     """Show (or replace) the title in the TITLE zone."""
-    new = fit_to(Text(text, font_size=font_size, color=color), "title")
+    new = fit_to(boxed(text, color=color, font_size=font_size), "title")
+    hud(scene, new)
     old = getattr(scene, "_kit_title", None)
     scene.play(*([FadeOut(old)] if old else []), FadeIn(new, shift=DOWN * 0.2))
     scene._kit_title = new
@@ -86,7 +122,9 @@ class Narrator:
 
     def say(self, text: str, wait: float | None = None, color=WHITE) -> Text:
         new = Text(_wrap(text, self.cpl), font_size=self.font_size, color=color, line_spacing=0.9)
+        new.add_background_rectangle(color=BLACK, opacity=0.82, buff=0.14)
         fit_to(new, "caption")
+        hud(self.scene, new)
         anims = [FadeIn(new)]
         if self.current is not None:
             anims.insert(0, FadeOut(self.current))
@@ -127,8 +165,9 @@ Scene.set_title = lambda self, text, **kw: set_title(self, text, **kw)
 
 
 def work_text(text: str, font_size: int = 28, color=WHITE) -> Text:
-    """A one-line worked equation placed in the WORK zone (fade it in/out yourself)."""
-    return fit_to(Text(text, font_size=font_size, color=color), "work")
+    """A one-line worked equation placed in the WORK zone (fade it in/out yourself).
+    In a 3-D scene call hud(self, eq) before showing it."""
+    return fit_to(boxed(text, color=color, font_size=font_size), "work")
 
 
 # ----------------------------------------------------------------- matrices --
@@ -153,7 +192,8 @@ class NumberMatrix(VGroup):
     """
 
     def __init__(self, values, name: str | None = None, decimals: int = 2, font_size: int = 30,
-                 h_buff: float = 0.45, v_buff: float = 0.3, color=WHITE, placeholder: str | None = None):
+                 h_buff: float = 0.45, v_buff: float = 0.3, color=WHITE, placeholder: str | None = None,
+                 col_colors=None):
         super().__init__()
         self.values = np.array(values, dtype=float)
         if self.values.ndim == 1:
@@ -163,7 +203,8 @@ class NumberMatrix(VGroup):
         rows, cols = self.values.shape
         self._strings = [[placeholder if placeholder is not None else fmt(v, decimals) for v in row]
                          for row in self.values]
-        self._colors = [[color] * cols for _ in range(rows)]
+        self._colors = [[(col_colors[j % len(col_colors)] if col_colors else color) for j in range(cols)]
+                        for _ in range(rows)]
         # A placeholder matrix reserves the width of its final numbers (the `values` passed in),
         # so filling it in later never makes it grow into its neighbours.
         self._reserve = ([[fmt(v, decimals) for v in row] for row in self.values]
@@ -435,3 +476,8 @@ class DataPlot(VGroup):
 
     def line_to(self, x0, y0, x1, y1, color=YELLOW) -> Line:
         return Line(self.point(x0, y0), self.point(x1, y1), color=color)
+
+
+# ----------------------------------------------------------------- space view (2-D / 3-D) --
+# Linear algebra as the transformation of space itself (see studio_space.py).
+from studio_space import I_COLOR, J_COLOR, K_COLOR, Plane2D, Space3D  # noqa: E402
