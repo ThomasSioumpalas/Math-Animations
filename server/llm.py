@@ -6,6 +6,7 @@ cooldown and the next provider is used, so the site keeps working when one free 
 """
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -62,32 +63,68 @@ def status() -> list[dict]:
             for n, _, _, m in config.ACTIVE_PROVIDERS]
 
 
+def _fail_on_status(name: str, status: int, text: str, retry_after: str) -> None:
+    if status == 429:
+        # Daily quota -> long cooldown; per-minute limit -> short one.
+        wait = float(retry_after) if retry_after.replace(".", "").isdigit() else 30
+        daily = bool(DAILY_QUOTA_RE.search(text)) and "minute" not in text.lower()
+        _cool(name, 3600 if daily else min(max(wait, 15), 300))
+        raise LLMError(f"{name}: rate limited")
+    if status in (401, 403):
+        _cool(name, 3600)
+        raise LLMError(f"{name}: key rejected (HTTP {status})")
+    if status == 503:
+        _cool(name, 90)  # "high demand": usually brief
+        raise LLMError(f"{name}: overloaded (HTTP 503)")
+    if status >= 400:
+        _cool(name, 120 if status >= 500 else 600)
+        raise LLMError(f"{name}: HTTP {status} {text[:200]}")
+
+
 def _call(name: str, base: str, key: str, model: str, messages: list[dict], temperature: float) -> str:
-    headers = {"Content-Type": "application/json"}
+    """Streamed request. Fails fast when the provider produces nothing within
+    LLM_FIRST_TOKEN_SECONDS (overloaded free tiers often just hang), so the chain moves on."""
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
     if key and key != "anonymous":
         headers["Authorization"] = f"Bearer {key}"
     body = {"model": model, "messages": messages, "temperature": temperature,
-            "max_tokens": config.LLM_MAX_TOKENS}
-    r = httpx.post(f"{base}/chat/completions", json=body, headers=headers, timeout=config.LLM_TIMEOUT_SECONDS)
-    if r.status_code == 429:
-        # Daily quota → long cooldown; per-minute limit → short one.
-        retry = r.headers.get("retry-after", "")
-        wait = float(retry) if retry.replace(".", "").isdigit() else 30
-        daily = bool(DAILY_QUOTA_RE.search(r.text)) and "minute" not in r.text.lower()
-        _cool(name, 3600 if daily else min(max(wait, 15), 300))
-        raise LLMError(f"{name}: rate limited")
-    if r.status_code in (401, 403):
-        _cool(name, 3600)
-        raise LLMError(f"{name}: key rejected (HTTP {r.status_code})")
-    if r.status_code >= 400:
-        _cool(name, 120 if r.status_code >= 500 else 600)
-        raise LLMError(f"{name}: HTTP {r.status_code} {r.text[:200]}")
+            "max_tokens": config.LLM_MAX_TOKENS, "stream": True}
+    timeout = httpx.Timeout(connect=20, read=config.LLM_FIRST_TOKEN_SECONDS, write=30, pool=20)
+    deadline = time.time() + config.LLM_TIMEOUT_SECONDS
+    parts: list[str] = []
     try:
-        content = r.json()["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, ValueError):
-        _cool(name, 120)
-        raise LLMError(f"{name}: unexpected response {r.text[:200]}")
+        with httpx.stream("POST", f"{base}/chat/completions", json=body, headers=headers, timeout=timeout) as r:
+            if r.status_code != 200:
+                text = r.read().decode("utf-8", "replace")
+                _fail_on_status(name, r.status_code, text, r.headers.get("retry-after", ""))
+            for line in r.iter_lines():
+                if time.time() > deadline:
+                    _cool(name, 120)
+                    raise LLMError(f"{name}: answer took longer than {config.LLM_TIMEOUT_SECONDS}s")
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    continue
+                if isinstance(chunk, list):  # Gemini sometimes wraps errors in a list
+                    chunk = chunk[0] if chunk else {}
+                if "error" in chunk:
+                    err = chunk["error"]
+                    _fail_on_status(name, int(err.get("code", 500)) if isinstance(err, dict) else 500, str(err), "")
+                for choice in chunk.get("choices") or []:
+                    piece = (choice.get("delta") or {}).get("content") or (choice.get("message") or {}).get("content")
+                    if piece:
+                        parts.append(piece)
+    except httpx.ReadTimeout:
+        _cool(name, 180)
+        raise LLMError(f"{name}: no output for {config.LLM_FIRST_TOKEN_SECONDS}s (overloaded?)")
+    content = "".join(parts)
     if not content.strip():
+        _cool(name, 60)
         raise LLMError(f"{name}: empty response")
     return content
 
@@ -104,13 +141,18 @@ def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = No
         for name, base, key, model in chain:
             if not _available(name):
                 continue
+            t0 = time.time()
             try:
-                return Reply(_call(name, base, key, model, messages, temperature), name, model)
+                text = _call(name, base, key, model, messages, temperature)
+                print(f"[llm] {name} ({model}) answered in {time.time() - t0:.0f}s", flush=True)
+                return Reply(text, name, model)
             except httpx.HTTPError as e:
                 _cool(name, 60)
                 errors.append(f"{name}: network error {type(e).__name__}")
+                print(f"[llm] {errors[-1]} -> trying next provider", flush=True)
             except LLMError as e:
                 errors.append(str(e))
+                print(f"[llm] {e} (after {time.time() - t0:.0f}s) -> trying next provider", flush=True)
         soonest = min((_cooldown_until.get(n, 0) for n, *_ in chain), default=0) - time.time()
         if soonest > 25:
             break

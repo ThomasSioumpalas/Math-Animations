@@ -27,7 +27,8 @@ matrices, brackets, captions or titles.
       .cell(i,j) .row(i) .col(j) .values .shape
       .highlight_cell(i,j) / .highlight_row(i) / .highlight_col(j) -> rectangle to Create/FadeOut
       .set_values(new) / .set_cell(i,j,v) -> animation; numbers morph and columns re-space
-      placeholder="?" -> an empty result matrix to fill step by step
+      placeholder="?" -> a result matrix shown as "?" and filled step by step. Pass the FINAL values as
+                         `values` (they reserve the space; the "?" are what is shown until you fill them)
   animate_transpose(src, dst) -> animation  cells (i,j) of src fly to (j,i) of dst (build dst from src.values.T)
   transform_column(self, M, j, new_col, formula_text, narrator, caption)   per-column operation, animated
   show_dot_product(self, A, i, B, j, C, narrator, caption) -> value
@@ -43,7 +44,33 @@ matrices, brackets, captions or titles.
                                           at the start of every storyboard step that changes the picture.
   Layout tips: two objects side by side -> fit_to(obj1, "left"), fit_to(obj2, "right"). Three or more
   matrices in a row -> VGroup(...).arrange(RIGHT, buff=0.6) then fit_to(group, "main"). Fade out what
-  is finished before showing the next big thing."""
+  is finished before showing the next big thing.
+
+CORRECT USAGE PATTERN (generic example: a per-column operation with every number shown):
+    def step_example(self):
+        clear_stage(self, self.plot)                      # keep the plot (its dots are kept too)
+        set_title(self, "Step 2: an operation per column")
+        M = fit_to(NumberMatrix(self.data, name="A"), "left")
+        self.play(FadeIn(M))
+        col = self.data[:, 0]
+        eq = work_text(f"mean = ({' + '.join(fmt(v) for v in col)}) / {len(col)} = {fmt(col.mean())}")
+        self.play(FadeIn(eq))                             # the calculation, with the real numbers
+        self.n.say("We add the four values of column 1 and divide by 4 to get its mean.")
+        self.play(FadeOut(eq))
+        transform_column(self, M, 0, col - col.mean(), f"x − {fmt(col.mean())}", self.n,
+                         "Every value of column 1 moves by the same amount.")
+        self.play(self.plot.move_dots(self.dots, new_rows))   # ALWAYS inside self.play(...)
+
+MISTAKES THE AUTOMATIC CHECKER REJECTS (your code will be sent back to you):
+- Calling M.set_values(...), M.set_cell(...), plot.move_dots(...), animate_transpose(...) or
+  obj.animate... on its own line: they only BUILD animations. Always self.play(...) them.
+- Defining your own clear_stage / set_title / fit_to / NumberMatrix / ... : use the kit's.
+- A result matrix that still shows "?" when it leaves the screen or at the end of the video.
+- Dots shown after their DataPlot was removed (keep the plot: clear_stage(self, plot)).
+- Text overlapping other text, matrices or plots, or going off-screen. Your own Text in the TITLE zone.
+- Highlight rectangles left on screen.
+ALSO REQUIRED (EXPLAIN mode): never show a computed value (a mean, a std, a matrix entry, ...) before
+showing its calculation with the real numbers, as in the work_text example above."""
 
 
 def system_prompt() -> str:

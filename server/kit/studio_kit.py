@@ -28,6 +28,9 @@ __all__ = [
     "show_matrix_product",
 ]
 
+# id(DataPlot) -> dot groups made by plot.dots(); kept at module level so it is never deep-copied
+_PLOT_DOTS: dict[int, list] = {}
+
 # ----------------------------------------------------------------- layout --
 # name: (center, max_width, max_height)
 ZONES = {
@@ -100,7 +103,12 @@ class Narrator:
 def clear_stage(scene: Scene, *keep: Mobject, run_time: float = 0.8) -> None:
     """Fade out everything on screen except the title, the current caption and `keep`.
     Call it between storyboard steps so old matrices, plots, dots and highlights never pile up."""
+    keep = tuple(m for m in keep if m is not None)
     protected = {id(m) for m in keep}
+    for m in keep:  # a kept plot keeps its dots
+        for g in _PLOT_DOTS.get(id(m), []):
+            protected.add(id(g))
+            protected.update(id(d) for d in g)
     title = getattr(scene, "_kit_title", None)
     if title is not None:
         protected.add(id(title))
@@ -155,6 +163,10 @@ class NumberMatrix(VGroup):
         self._strings = [[placeholder if placeholder is not None else fmt(v, decimals) for v in row]
                          for row in self.values]
         self._colors = [[color] * cols for _ in range(rows)]
+        # A placeholder matrix reserves the width of its final numbers (the `values` passed in),
+        # so filling it in later never makes it grow into its neighbours.
+        self._reserve = ([[fmt(v, decimals) for v in row] for row in self.values]
+                         if placeholder is not None else None)
         grid, brackets, label = self._build()
         self._grid = grid
         self.cells = VGroup(*(t for row in grid for t in row))
@@ -172,6 +184,10 @@ class NumberMatrix(VGroup):
                  for j in range(cols)] for i in range(rows)]
         ref_h = Text("0", font_size=self.font_size).height
         col_w = [max(max(grid[i][j].width for i in range(rows)), ref_h * 0.7) for j in range(cols)]
+        if self._reserve is not None:
+            for j in range(cols):
+                col_w[j] = max(col_w[j], *(Text(self._reserve[i][j], font_size=self.font_size).width
+                                           for i in range(rows)))
         x = 0.0
         for j in range(cols):
             for i in range(rows):
@@ -220,30 +236,24 @@ class NumberMatrix(VGroup):
     def highlight_col(self, j, color=YELLOW) -> SurroundingRectangle:
         return SurroundingRectangle(self.col(j), color=color, buff=0.1)
 
-    def _relayout(self, lag_ratio: float = 0.0) -> AnimationGroup:
-        """Animation from the current picture to a fresh layout of the current strings,
-        keeping the matrix centered where it is and at its current scale."""
+    def _relayout(self, lag_ratio: float = 0.0) -> Transform:
+        """One Transform of the whole matrix to a fresh layout of the current strings, keeping it
+        centered where it is and at its current scale. Animating the matrix as a single object
+        keeps it intact in the scene (per-cell animations make Manim split the group apart)."""
         center = VGroup(self.cells, self.brackets).get_center()
         old_h = abs(self.brackets[0].get_top()[1] - self.brackets[0].get_bottom()[1])
         grid, brackets, label = self._build()
         new_h = abs(brackets[0].get_top()[1] - brackets[0].get_bottom()[1])
-        parts = VGroup(*(t for r in grid for t in r), brackets, *([label] if label is not None else []))
+        cells = VGroup(*(t for r in grid for t in r))
+        parts = [cells, brackets] + ([label] if self.label is not None and label is not None else [])
+        target = VGroup(*parts)
         if new_h > 0 and old_h > 0:
-            parts.scale(old_h / new_h, about_point=ORIGIN)
-        parts.shift(center - VGroup(*(t for r in grid for t in r), brackets).get_center())
-        anims = []
-        for i, row in enumerate(grid):
-            for j, new in enumerate(row):
-                old = self._grid[i][j]
-                old.text = self._strings[i][j]
-                old.original_text = self._strings[i][j]
-                anims.append(Transform(old, new))
-        anims += [Transform(self.brackets[k], brackets[k]) for k in range(2)]
-        if self.label is not None and label is not None:
-            anims.append(Transform(self.label, label))
-        return AnimationGroup(*anims, lag_ratio=lag_ratio)
+            target.scale(old_h / new_h, about_point=ORIGIN)
+        target.shift(center - VGroup(cells, brackets).get_center())
+        texts = [(self._grid[i][j], self._strings[i][j]) for i in range(len(grid)) for j in range(len(grid[0]))]
+        return _MatrixTransform(self, target, texts)
 
-    def set_cell(self, i: int, j: int, value: float, color=None) -> AnimationGroup:
+    def set_cell(self, i: int, j: int, value: float, color=None) -> Transform:
         """Animation: change one number (the matrix re-spaces if the width changes)."""
         self.values[i, j] = value
         self._strings[i][j] = fmt(value, self.decimals)
@@ -251,7 +261,7 @@ class NumberMatrix(VGroup):
             self._colors[i][j] = color
         return self._relayout()
 
-    def set_values(self, new_values, color=None, lag_ratio: float = 0.0) -> AnimationGroup:
+    def set_values(self, new_values, color=None, lag_ratio: float = 0.0) -> Transform:
         """Animation: change every number (shape must match)."""
         new_values = np.array(new_values, dtype=float).reshape(self.values.shape)
         for i in range(new_values.shape[0]):
@@ -263,6 +273,21 @@ class NumberMatrix(VGroup):
                         self._colors[i][j] = color
         self.values = new_values
         return self._relayout(lag_ratio)
+
+
+class _MatrixTransform(Transform):
+    """Transform of a whole NumberMatrix that records each cell's new text only when it actually
+    plays, so the layout checker sees what is really on screen (an unplayed set_values changes nothing)."""
+
+    def __init__(self, matrix, target, texts, **kw):
+        super().__init__(matrix, target, **kw)
+        self._texts = texts
+
+    def begin(self):
+        super().begin()
+        for cell, text in self._texts:
+            cell.text = text
+            cell.original_text = text
 
 
 def animate_transpose(source: NumberMatrix, target: NumberMatrix) -> AnimationGroup:
@@ -329,7 +354,7 @@ def show_matrix_product(scene: Scene, A, B, name: str = "C", a_name: str | None 
     Bv = B.values if isinstance(B, NumberMatrix) else np.asarray(B, dtype=float)
     Am = NumberMatrix(Av, name=a_name, font_size=font_size)
     Bm = NumberMatrix(Bv, name=b_name, font_size=font_size)
-    Cm = NumberMatrix(np.zeros((Av.shape[0], Bv.shape[1])), name=name, font_size=font_size, placeholder="?")
+    Cm = NumberMatrix(Av @ Bv, name=name, font_size=font_size, placeholder="?")  # reserves final widths
     dot = Text("·", font_size=font_size + 10)
     eq = Text("→", font_size=font_size + 4)
     row = VGroup(Am, dot, Bm, eq, Cm).arrange(RIGHT, buff=0.35)
@@ -393,7 +418,14 @@ class DataPlot(VGroup):
 
     def dots(self, data, color=BLUE, radius: float = 0.08) -> VGroup:
         data = np.asarray(data, dtype=float)
-        return VGroup(*(Dot(self.point(r[0], r[1]), color=color, radius=radius) for r in data))
+        group = VGroup(*(Dot(self.point(r[0], r[1]), color=color, radius=radius) for r in data))
+        # Pair dots with their axes by id only: Manim deep-copies mobjects when animating, and a
+        # reference to the whole plot on every dot would be copied each time (very slow).
+        group._kit_plot_id = id(self)
+        for d in group:
+            d._kit_plot_id = id(self)
+        _PLOT_DOTS.setdefault(id(self), []).append(group)
+        return group
 
     def move_dots(self, dots: VGroup, new_data, run_time: float = 2.0) -> AnimationGroup:
         new_data = np.asarray(new_data, dtype=float)

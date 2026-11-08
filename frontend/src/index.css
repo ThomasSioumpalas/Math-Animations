@@ -207,3 +207,5 @@ kbd { background: var(--panel-3); border: 1px solid var(--border-2); border-bott
   .row-actions { display: flex; }
   .folder-row .count { display: none; }
 }
+.details.notes summary { color: var(--accent-2); }
+.details.notes ul { margin: 0; padding: 12px 20px 14px 34px; font-size: 13px; color: var(--muted); line-height: 1.6; }

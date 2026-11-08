@@ -49,11 +49,14 @@ COOKIE_SECURE = _bool("COOKIE_SECURE", False)  # set true behind https
 # Free providers, tried in order. When one is rate-limited or out of daily quota, the next one
 # is used automatically. A provider is enabled when its key is set (OVHcloud needs no key).
 # Each entry: (name, base_url, api_key, model)
-PROVIDERS = [
-    ("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai",
-     os.getenv("GEMINI_API_KEY", ""), os.getenv("GEMINI_MODEL", "gemini-3.8-flash")),
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
+_GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+# Several Gemini models in a row: each has its own free quota, and when the newest one is
+# overloaded (free tier gets the lowest priority) the next one usually answers in seconds.
+_GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.8-flash,gemini-3.6-flash").split(",") if m.strip()]
+PROVIDERS = [(f"Gemini {m.removeprefix('gemini-')}", _GEMINI_BASE, _GEMINI_KEY, m) for m in _GEMINI_MODELS] + [
     ("NVIDIA", "https://integrate.api.nvidia.com/v1",
-     os.getenv("NVIDIA_API_KEY", ""), os.getenv("NVIDIA_MODEL", "google/gemma-4-31b-it")),
+     os.getenv("NVIDIA_API_KEY", ""), os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")),
     ("Z.ai", "https://api.z.ai/api/paas/v4",
      os.getenv("ZAI_API_KEY", ""), os.getenv("ZAI_MODEL", "glm-4.7-flash")),
     ("OVHcloud", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
@@ -65,12 +68,13 @@ if os.getenv("CUSTOM_LLM_BASE_URL") and os.getenv("CUSTOM_LLM_MODEL"):
                       os.getenv("CUSTOM_LLM_API_KEY", "none"), os.environ["CUSTOM_LLM_MODEL"]))
 ACTIVE_PROVIDERS = [p for p in PROVIDERS if p[2]]
 
-LLM_TIMEOUT_SECONDS = _int("LLM_TIMEOUT_SECONDS", 240)
+LLM_TIMEOUT_SECONDS = _int("LLM_TIMEOUT_SECONDS", 420)          # whole answer
+LLM_FIRST_TOKEN_SECONDS = _int("LLM_FIRST_TOKEN_SECONDS", 75)   # no output by then -> next provider
 LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 16000)
 LLM_DAILY_CALL_LIMIT = _int("LLM_DAILY_CALL_LIMIT", 0)  # 0 = no site-wide cap
 
 # --- rendering -----------------------------------------------------------------
-MAX_FIX_ATTEMPTS = _int("MAX_FIX_ATTEMPTS", 2)          # LLM repair rounds after a failed render
+MAX_FIX_ATTEMPTS = _int("MAX_FIX_ATTEMPTS", 3)          # LLM repair rounds after a failed render
 RENDER_TIMEOUT_SECONDS = _int("RENDER_TIMEOUT_SECONDS", 600)
 RENDER_WORKERS = _int("RENDER_WORKERS", 1)               # parallel renders (CPU bound)
 MAX_VIDEO_SECONDS = _int("MAX_VIDEO_SECONDS", 360)

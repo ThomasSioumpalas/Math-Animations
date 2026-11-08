@@ -200,14 +200,47 @@ def main() -> int:
                 issues.setdefault(f"rect:{first:.0f}", f"a highlight rectangle created at t={first:.0f}s is still "
                                                        f"on screen at t={t:.0f}s (FadeOut highlights right after use)")
 
+        # Content checks: dots without their axes, result matrices left as "?".
+        on_screen = {id(m) for top in scene.mobjects for m in top.get_family()}
+        for top in scene.mobjects:
+            for m in top.get_family():
+                plot_id = getattr(m, "_kit_plot_id", None)
+                if plot_id is not None and _visible(m) and plot_id not in on_screen:
+                    issues.setdefault("orphan-dots", f"data points are on screen without their axes at t={t:.0f}s "
+                                                     "(keep the DataPlot on screen while its dots are shown: "
+                                                     "clear_stage(self, plot) keeps both)")
+                if type(m).__name__ == "NumberMatrix" and _visible(m) and _has_placeholder(m):
+                    placeholder_live[id(m)] = (m, t)
+        # A matrix that left the screen while still showing "?" was never filled in.
+        for key, (m, seen) in list(placeholder_live.items()):
+            if key not in on_screen or not _visible(m):
+                del placeholder_live[key]
+                if _has_placeholder(m):
+                    issues.setdefault(f"ph:{key}", f"{_name(m)} was removed at t={t:.0f}s still showing '?' cells: "
+                                                   "fill it with self.play(M.set_values(...)) or show_matrix_product")
+
+    def _has_placeholder(m) -> bool:
+        return any(str(getattr(c, "original_text", None) or getattr(c, "text", "")).strip() == "?" for c in m.cells)
+
+    def final_check() -> None:
+        for key, (m, seen) in placeholder_live.items():
+            if _has_placeholder(m):
+                issues.setdefault(f"ph:{key}", f"{_name(m)} still shows '?' cells at the end of the video: "
+                                               "fill it with self.play(M.set_values(...)) or show_matrix_product")
+
+    placeholder_live: dict[int, tuple] = {}
+    lint_time = [0.0]
+    import time as _time
     original_play = Scene.play
 
     def play_and_lint(self, *a, **kw):
         result = original_play(self, *a, **kw)
+        t0 = _time.perf_counter()
         try:
             lint(self)
         except Exception:
             pass
+        lint_time[0] += _time.perf_counter() - t0
         return result
 
     Scene.play = play_and_lint
@@ -228,6 +261,8 @@ def main() -> int:
         apply_config()  # undo any config tweaks made at import time
         scene = cls()
         scene.render()
+        final_check()
+        print(f"[lint] {lint_time[0]:.1f}s spent in layout checks", flush=True)
         if issues:
             print("__LAYOUT__=" + json.dumps(list(issues.values())[:12]), flush=True)
         print(f"__VIDEO__={scene.renderer.file_writer.movie_file_path}", flush=True)

@@ -117,9 +117,41 @@ def validate(code: str) -> list[str]:
             bad(node, f"keyword argument '{node.arg}=' is not allowed")
         elif isinstance(node, ast.ClassDef) and node.name == SCENE_NAME:
             scene_found = True
+        # --- correctness checks (common model mistakes that silently ruin the video) ---
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in KIT_NAMES:
+            bad(node, f"do not define your own '{node.name}': studio_kit already provides it. Delete your "
+                      f"version and call the kit's ({KIT_CALL_HINT.get(node.name, node.name + '(...)')})")
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            name = _call_name(node.value)
+            if name in ANIMATION_RETURNING or _is_animate_chain(node.value.func):
+                bad(node, f"'{name or '.animate'}(...)' only BUILDS an animation; on its own line it does nothing. "
+                          f"Wrap it: self.play({ast.unparse(node.value)[:60]})")
     if not scene_found:
         problems.append(f"no class named {SCENE_NAME} was defined")
     return problems[:15]
+
+
+# studio_kit helpers the model must use, not re-implement (a re-implementation shadows the tested one)
+KIT_NAMES = {"clear_stage", "set_title", "fit_to", "Narrator", "NumberMatrix", "show_dot_product",
+             "transform_column", "animate_transpose", "work_text", "DataPlot", "show_matrix_product", "fmt"}
+KIT_CALL_HINT = {"clear_stage": "clear_stage(self, *keep)", "set_title": "set_title(self, text)"}
+# Functions/methods that RETURN an animation which must be passed to self.play(...)
+ANIMATION_RETURNING = {"set_values", "set_cell", "move_dots", "animate_transpose"}
+
+
+def _call_name(call: ast.Call) -> str:
+    f = call.func
+    return f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else ""
+
+
+def _is_animate_chain(func: ast.AST) -> bool:
+    """True for expressions like `obj.animate.shift(UP)` used as a bare statement."""
+    node = func
+    while isinstance(node, (ast.Attribute, ast.Call)):
+        if isinstance(node, ast.Attribute) and node.attr == "animate":
+            return True
+        node = node.value if isinstance(node, ast.Attribute) else node.func
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +162,7 @@ class RenderResult:
     error: str
     seconds: float
     warnings: list = field(default_factory=list)  # layout problems found while rendering
+    log: str = ""                                 # tail of the renderer output (diagnostics)
 
 
 QUALITY = {"low": "low_quality", "medium": "medium_quality", "high": "high_quality"}
@@ -203,7 +236,7 @@ def render(code: str, work: Path, quality: str = "low") -> RenderResult:
         except ValueError:
             pass
     if proc.returncode == 0 and m and Path(m.group(1).strip()).is_file():
-        return RenderResult(True, Path(m.group(1).strip()), "", time.time() - t0, warnings[:12])
+        return RenderResult(True, Path(m.group(1).strip()), "", time.time() - t0, warnings[:12], log[-2000:])
     if proc.returncode and proc.returncode < 0:
         log += f"\n(renderer killed by signal {-proc.returncode}; probably out of memory or CPU time)"
     return RenderResult(False, None, _trim_log(log), time.time() - t0)

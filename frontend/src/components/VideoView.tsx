@@ -65,6 +65,13 @@ export default function VideoView({ video, folders, onRename, onMove, onDelete, 
         <button className="ghost danger" onClick={() => { if (confirm('Delete this video?')) void onDelete() }}><Trash2 size={15} /> Delete</button>
       </div>
 
+      {!!video.layout_notes?.length && (
+        <details className="details notes">
+          <summary>Automatic check: {video.layout_notes.length} layout issue{video.layout_notes.length > 1 ? 's' : ''} the AI could not fully fix</summary>
+          <ul>{video.layout_notes.map((n) => <li key={n}>{n}</li>)}</ul>
+        </details>
+      )}
+
       {showCode && <CodePanel code={code} downloadUrl={api.codeUrl(video.id)} />}
 
       <section className="prompt-box">
