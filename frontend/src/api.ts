@@ -12,7 +12,10 @@ export type Video = {
   layout_notes?: string[]
 }
 
-export type JobStatus = 'queued' | 'writing' | 'rendering' | 'fixing' | 'done' | 'failed'
+export type Thinking = 'standard' | 'high' | 'max'
+export type ChatMessage = { role: 'user' | 'assistant'; content: string; at: number; model?: string; thinking?: Thinking }
+
+export type JobStatus = 'queued' | 'writing' | 'rendering' | 'fixing' | 'done' | 'failed' | 'cancelled'
 
 export type Job = {
   id: string
@@ -99,6 +102,10 @@ export const api = {
     req<Video>('PATCH', `/api/videos/${id}`, patch),
   deleteVideo: (id: string) => req('DELETE', `/api/videos/${id}`),
   code: (id: string) => req<string>('GET', `/api/videos/${id}/code`),
+  cancelJob: (id: string) => req('POST', `/api/jobs/${id}/cancel`),
+  videoChat: (id: string) => req<{ messages: ChatMessage[] }>('GET', `/api/videos/${id}/chat`),
+  askVideo: (id: string, message: string, thinking: Thinking) =>
+    req<{ messages: ChatMessage[] }>('POST', `/api/videos/${id}/chat`, { message, thinking }),
   generate: (prompt: string, folder_id: string, quality: string) =>
     req<Job>('POST', '/api/generate', { prompt, folder_id, quality }),
   videoUrl: (id: string, download = false) =>

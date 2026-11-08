@@ -63,13 +63,35 @@ def status() -> list[dict]:
             for n, _, _, m in config.ACTIVE_PROVIDERS]
 
 
+RETRY_TEXT_RE = re.compile(r"retry in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:([\d.]+)s)?", re.I)
+RETRY_DELAY_RE = re.compile(r'"retryDelay"\s*:\s*"([\d.]+)s"')
+
+
+def _provider_wait(text: str) -> float | None:
+    """Seconds the provider asked us to wait (Gemini: 'Please retry in 11h47m29s' / retryDelay)."""
+    m = RETRY_DELAY_RE.search(text)
+    if m:
+        return float(m.group(1))
+    m = RETRY_TEXT_RE.search(text)
+    if m and any(m.groups()):
+        h, mi, s = (float(g) if g else 0.0 for g in m.groups())
+        return h * 3600 + mi * 60 + s
+    return None
+
+
 def _fail_on_status(name: str, status: int, text: str, retry_after: str) -> None:
     if status == 429:
-        # Daily quota -> long cooldown; per-minute limit -> short one.
-        wait = float(retry_after) if retry_after.replace(".", "").isdigit() else 30
+        # Use the provider's own wait time when it gives one (a daily quota can mean ~12 h);
+        # otherwise: daily quota -> 1 h, per-minute limit -> a short pause.
+        asked = _provider_wait(text)
+        if asked is None and retry_after.replace(".", "").isdigit():
+            asked = float(retry_after)
         daily = bool(DAILY_QUOTA_RE.search(text)) and "minute" not in text.lower()
-        _cool(name, 3600 if daily else min(max(wait, 15), 300))
-        raise LLMError(f"{name}: rate limited")
+        if asked is not None:
+            _cool(name, min(max(asked, 15), 86400))
+        else:
+            _cool(name, 3600 if daily else 30)
+        raise LLMError(f"{name}: rate limited" + (" (daily quota used up)" if daily else ""))
     if status in (401, 403):
         _cool(name, 3600)
         raise LLMError(f"{name}: key rejected (HTTP {status})")
@@ -81,7 +103,8 @@ def _fail_on_status(name: str, status: int, text: str, retry_after: str) -> None
         raise LLMError(f"{name}: HTTP {status} {text[:200]}")
 
 
-def _call(name: str, base: str, key: str, model: str, messages: list[dict], temperature: float) -> str:
+def _call(name: str, base: str, key: str, model: str, messages: list[dict], temperature: float,
+          should_stop=None, effort: str | None = None) -> str:
     """Streamed request. Fails fast when the provider produces nothing within
     LLM_FIRST_TOKEN_SECONDS (overloaded free tiers often just hang), so the chain moves on."""
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
@@ -89,6 +112,8 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
         headers["Authorization"] = f"Bearer {key}"
     body = {"model": model, "messages": messages, "temperature": temperature,
             "max_tokens": config.LLM_MAX_TOKENS, "stream": True}
+    if effort:
+        body["reasoning_effort"] = effort
     timeout = httpx.Timeout(connect=20, read=config.LLM_FIRST_TOKEN_SECONDS, write=30, pool=20)
     deadline = time.time() + config.LLM_TIMEOUT_SECONDS
     parts: list[str] = []
@@ -98,6 +123,8 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
                 text = r.read().decode("utf-8", "replace")
                 _fail_on_status(name, r.status_code, text, r.headers.get("retry-after", ""))
             for line in r.iter_lines():
+                if should_stop is not None and should_stop():
+                    raise LLMError("cancelled")
                 if time.time() > deadline:
                     _cool(name, 120)
                     raise LLMError(f"{name}: answer took longer than {config.LLM_TIMEOUT_SECONDS}s")
@@ -129,7 +156,8 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
     return content
 
 
-def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = None) -> Reply:
+def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = None,
+         should_stop=None, effort: str | None = None) -> Reply:
     """Send a chat request to the first available provider in the chain.
     `prefer` puts a provider first (used so a fix round stays on the model that wrote the code)."""
     if not config.ACTIVE_PROVIDERS:
@@ -139,11 +167,13 @@ def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = No
     errors = []
     for _ in range(2):  # second pass: retry anything whose short cooldown has expired
         for name, base, key, model in chain:
+            if should_stop is not None and should_stop():
+                raise LLMError("cancelled")
             if not _available(name):
                 continue
             t0 = time.time()
             try:
-                text = _call(name, base, key, model, messages, temperature)
+                text = _call(name, base, key, model, messages, temperature, should_stop, effort)
                 print(f"[llm] {name} ({model}) answered in {time.time() - t0:.0f}s", flush=True)
                 return Reply(text, name, model)
             except httpx.HTTPError as e:
@@ -151,6 +181,8 @@ def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = No
                 errors.append(f"{name}: network error {type(e).__name__}")
                 print(f"[llm] {errors[-1]} -> trying next provider", flush=True)
             except LLMError as e:
+                if str(e) == "cancelled":
+                    raise
                 errors.append(str(e))
                 print(f"[llm] {e} (after {time.time() - t0:.0f}s) -> trying next provider", flush=True)
         soonest = min((_cooldown_until.get(n, 0) for n, *_ in chain), default=0) - time.time()

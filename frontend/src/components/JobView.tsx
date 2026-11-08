@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, LoaderCircle, Pencil, RotateCcw, TriangleAlert } from 'lucide-react'
+import { Check, LoaderCircle, Pencil, RotateCcw, TriangleAlert, X } from 'lucide-react'
 import { ACTIVE, type Job } from '../api'
 import CodePanel from './CodePanel'
 import { duration } from '../util'
@@ -13,11 +13,15 @@ function stepIndex(job: Job): number {
     case 'rendering':
     case 'fixing': return 2
     case 'done': return 3
-    case 'failed': return job.code ? 2 : 1
+    case 'failed':
+    case 'cancelled': return job.code ? 2 : 1
   }
 }
 
-export default function JobView({ job, onRetry, onEdit }: { job: Job; onRetry: () => void; onEdit: () => void }) {
+type Props = { job: Job; onRetry: () => void; onEdit: () => void; onCancel: () => Promise<void> }
+
+export default function JobView({ job, onRetry, onEdit, onCancel }: Props) {
+  const [cancelling, setCancelling] = useState(false)
   const [now, setNow] = useState(Date.now() / 1000)
   const active = ACTIVE.includes(job.status)
   useEffect(() => {
@@ -57,8 +61,17 @@ export default function JobView({ job, onRetry, onEdit }: { job: Job; onRetry: (
         <div className={`stage-msg ${failed ? 'danger' : ''}`}>
           {active && <div className="progress"><div /></div>}
           <p>{job.message}{job.status === 'queued' && job.position > 1 ? ` (position ${job.position})` : ''}</p>
-          {active && <p className="muted small">This usually takes 30 to 90 seconds. You can start another animation or browse your library while you wait.</p>}
+          {active && <p className="muted small">Short animations take about a minute; step-by-step explanations take 3 to 10 minutes. You can start another animation or browse your library while you wait.</p>}
         </div>
+        {active && (
+          <div className="row gap">
+            <button className="ghost danger" disabled={cancelling}
+              onClick={async () => { setCancelling(true); try { await onCancel() } finally { setCancelling(false) } }}>
+              {cancelling ? <LoaderCircle size={15} className="spin" /> : <X size={15} />} Cancel
+            </button>
+            <span className="muted small">Stops it now and puts your prompt back in the box.</span>
+          </div>
+        )}
         {failed && (
           <div className="row gap">
             <button className="primary" onClick={onRetry}><RotateCcw size={15} /> Try again</button>

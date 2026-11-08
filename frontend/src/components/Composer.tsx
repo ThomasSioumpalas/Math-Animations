@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, LoaderCircle, Sparkles } from 'lucide-react'
 import type { Folder, PublicConfig } from '../api'
-
-const EXAMPLES = [
-  { label: 'Bouncing ball', prompt: 'A red ball drops from the top of the screen onto a floor line and bounces three times, each bounce lower than the last, then rolls to the right and stops.' },
-  { label: 'Sorting algorithm', prompt: 'Visualize bubble sort on the bars [5, 2, 8, 1, 9, 3]. Highlight the two bars being compared in yellow, swap them with a short animation when needed, and color each bar green once it is in its final position.' },
-  { label: 'Function graph', prompt: 'Draw axes from -4 to 4, plot y = sin(x) in blue, then morph it into y = 2·sin(x) and finally into y = sin(2x). Label each curve with its formula.' },
-  { label: 'Solar system', prompt: 'A yellow sun in the center with three planets of different sizes and colors orbiting it on circular paths at different speeds. Show the orbit paths as faint dashed circles.' },
-  { label: 'Pie chart', prompt: 'Build a pie chart of the shares 40% Rent, 25% Food, 20% Transport, 15% Other. Each slice grows in one after the other with its own color and label.' },
-  { label: 'Shape morph', prompt: 'A blue square rotates once, morphs into a green circle, then into an orange triangle, and finally shrinks to a point and fades out.' },
-]
+import ExampleLibrary from './ExampleLibrary'
 
 type Props = {
   config: PublicConfig | null
@@ -84,17 +76,13 @@ export default function Composer(p: Props) {
       </form>
       <div className="hint">Tip: be specific. Name the steps, the numbers and the colors. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to send.{p.config && <> Model: <code>{p.config.model}</code> + free fallbacks</>}</div>
 
-      <div className="examples">
-        <div className="examples-title">Try an example</div>
-        <div className="example-grid">
-          {EXAMPLES.map((ex) => (
-            <button key={ex.label} className="example" onClick={() => { p.setDraft(ex.prompt); ref.current?.focus() }}>
-              <strong>{ex.label}</strong>
-              <span>{ex.prompt}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      <ExampleLibrary
+        onPick={(prompt) => {
+          p.setDraft(prompt)
+          ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          ref.current?.focus({ preventScroll: true })
+        }}
+      />
     </div>
   )
 }

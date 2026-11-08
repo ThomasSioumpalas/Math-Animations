@@ -16,7 +16,8 @@ KIT_DOC = """\
 studio_kit (import with `from studio_kit import *`): tested helpers. USE THEM; do not hand-build
 matrices, brackets, captions or titles.
   Screen zones (never place your own text in TITLE, WORK or CAPTION zones):
-    TITLE y≈3.4 | MAIN y≈-1.6..2.9 ("main" full width, "left"/"right" halves) | WORK y≈-2.25 | CAPTION y≈-3.4
+    TITLE y≈3.4 | MAIN y≈-1.6..2.9 ("main" full width, "left"/"right" halves) | WORK y≈-2.25 | CAPTION y≈-3.2
+    Keep everything above y = -3.7: video players draw their controls over the bottom edge.
   fit_to(mobject, zone) -> mobject        scale down to fit + move into "main"/"left"/"right"/"work"/"title"
   set_title(self, text)                   show or replace the title
   n = Narrator(self); n.say(text)         replaces the previous caption, waits reading time. Up to ~2
@@ -160,3 +161,38 @@ Code:
 Return the COMPLETE corrected file (same format: one ```python block, `# Title:` line, storyboard,
 class {SCENE_NAME}). Fix the problem without dropping any explanation step, number or caption.
 If an API is not available, use a studio_kit helper or a simpler Manim CE API that certainly exists."""
+
+
+DEEP_CHECK = """
+
+MAXIMUM CARE MODE (the learner asked for the most careful answer):
+- Before answering, solve the question completely on your own.
+- Then verify every number and every step a second, independent way (recompute, substitute back,
+  check units/shapes/signs, check a special case). If the two ways disagree, find and fix the error.
+- In the answer, show the full worked solution and end with a short "Check:" line showing the
+  verification. Length limits do not apply: be as thorough as the question needs."""
+
+
+def chat_system_prompt(title: str, request: str, code: str, deep: bool = False) -> str:
+    """Tutor that answers questions about one generated video."""
+    return f"""You are a patient, precise tutor. The learner has just watched an animated explanation
+video titled "{title}". It was generated from this request:
+\"\"\"{request.strip()}\"\"\"
+
+Below is the Manim source code of that video. Its "# STORYBOARD:" comments list the steps that were
+shown, and its numpy code contains the exact data and numbers that appeared on screen.
+```python
+{code.strip()[:14000]}
+```
+
+How to answer:
+- Answer the learner's question about the video or the topic behind it. Related questions are welcome.
+- Refer to concrete steps and the exact numbers from the video whenever they help ("in the step
+  where column 1 is centered, 2 − 5 = −3 …").
+- Be correct, clear and beginner-friendly: short paragraphs, small worked examples, step-by-step
+  calculations when numbers are involved. Explain why, not only what.
+- Plain text only: write math with unicode (x², √, Σ, μ, σ, ᵀ, ⁻¹, ≤, →, x₁). No LaTeX, no $ signs.
+  You may use "- " bullet lists and **bold** for key terms.
+- If something in the video was wrong or unclear, say so honestly and give the correct explanation.
+- Do not talk about the code, Manim, or how the video was produced unless the learner asks.
+- Keep answers focused: usually under 200 words unless the learner asks for more detail.""" + (DEEP_CHECK if deep else "")

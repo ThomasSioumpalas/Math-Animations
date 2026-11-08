@@ -193,7 +193,18 @@ def _limits() -> None:  # runs in the child before exec (Linux only)
     resource.setrlimit(resource.RLIMIT_FSIZE, (300 * 1024 * 1024, 300 * 1024 * 1024))
 
 
-def render(code: str, work: Path, quality: str = "low") -> RenderResult:
+def kill(proc) -> None:
+    """Kill a render subprocess (and its children on Linux)."""
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+
+
+def render(code: str, work: Path, quality: str = "low", on_start=None) -> RenderResult:
     """Render GeneratedScene from `code` inside `work`. Never raises."""
     t0 = time.time()
     if work.exists():
@@ -213,6 +224,8 @@ def render(code: str, work: Path, quality: str = "low") -> RenderResult:
             preexec_fn=_limits if posix else None,
             creationflags=0 if posix else subprocess.CREATE_NEW_PROCESS_GROUP,
         )
+        if on_start is not None:
+            on_start(proc)
         try:
             out, _ = proc.communicate(timeout=config.RENDER_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:

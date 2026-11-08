@@ -138,12 +138,25 @@ export default function App() {
             onMove={(fid) => run(async () => { await api.updateVideo(video.id, { folder_id: fid }); toast('Moved') })}
             onDelete={() => run(async () => { await api.deleteVideo(video.id); setSelection({ kind: 'new' }) })}
             onRemix={() => { setDraft(video.prompt); setFolderId(video.folder_id); setSelection({ kind: 'new' }) }}
+            onAnimate={(prompt) => { setDraft(prompt); setFolderId(video.folder_id); setSelection({ kind: 'new' }); toast('Prompt ready: edit it if you like, then press Generate.') }}
           />
         ) : job ? (
           <JobView
             job={job}
             onRetry={() => void generate(job.prompt, job.folder_id, job.quality)}
             onEdit={() => { setDraft(job.prompt); setSelection({ kind: 'new' }) }}
+            onCancel={async () => {
+              try {
+                await api.cancelJob(job.id)
+                setDraft(job.prompt)
+                setFolderId(job.folder_id)
+                setSelection({ kind: 'new' })
+                toast('Cancelled. Your prompt is back in the box.')
+              } catch (e) {
+                toast((e as Error).message, 'error')
+              }
+              await refresh()
+            }}
           />
         ) : (
           <Composer

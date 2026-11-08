@@ -8,7 +8,7 @@ never pile on top of each other:
          │ TITLE  (set_title)                            │ y ≈ 3.4
          │ MAIN area  (fit_to(m, "main"/"left"/"right")) │ y ≈ -1.6 .. 2.9
          │ WORK line  (equations, show_dot_product)      │ y ≈ -2.25
-         │ CAPTION    (Narrator.say)                     │ y ≈ -3.4
+         │ CAPTION    (Narrator.say)                     │ y ≈ -3.2 (clear of player controls)
     y -4 └──────────────────────────────────────────────┘
 """
 from __future__ import annotations
@@ -39,7 +39,8 @@ ZONES = {
     "left": (np.array([-3.6, 0.65, 0.0]), 6.4, 4.4),
     "right": (np.array([3.6, 0.65, 0.0]), 6.4, 4.4),
     "work": (np.array([0.0, -2.25, 0.0]), 13.0, 0.75),
-    "caption": (np.array([0.0, -3.35, 0.0]), 13.4, 1.15),
+    # Kept above the bottom ~4% of the frame: video players draw their control bar there.
+    "caption": (np.array([0.0, -3.2, 0.0]), 13.4, 1.0),
 }
 
 

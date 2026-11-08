@@ -70,7 +70,10 @@ ACTIVE_PROVIDERS = [p for p in PROVIDERS if p[2]]
 
 LLM_TIMEOUT_SECONDS = _int("LLM_TIMEOUT_SECONDS", 420)          # whole answer
 LLM_FIRST_TOKEN_SECONDS = _int("LLM_FIRST_TOKEN_SECONDS", 75)   # no output by then -> next provider
-LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 16000)
+LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 32768)   # includes thinking tokens; all providers accept 32768
+# Reasoning ("thinking") effort sent to every provider (OpenAI-style `reasoning_effort`).
+# Gemini Flash accepts none/minimal/low/medium/high; "high" is its maximum.
+VIDEO_REASONING_EFFORT = os.getenv("VIDEO_REASONING_EFFORT", "high")   # writing + fixing videos
 LLM_DAILY_CALL_LIMIT = _int("LLM_DAILY_CALL_LIMIT", 0)  # 0 = no site-wide cap
 
 # --- rendering -----------------------------------------------------------------

@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs, llm
+from . import config, jobs, llm, prompts
 from .storage import DEFAULT_FOLDER_ID, SID_RE, new_id, new_session_id, store
 
 
@@ -63,7 +63,9 @@ def _state_view(sid: str) -> dict:
     return {
         "session_id": sid,
         "folders": state["folders"],
-        "videos": sorted(state["videos"], key=lambda v: v["created_at"], reverse=True),
+        # chats are fetched per video (keeps the frequently polled session payload small)
+        "videos": sorted(({k: v for k, v in vid.items() if k != "chat"} for vid in state["videos"]),
+                         key=lambda v: v["created_at"], reverse=True),
         "jobs": [j.public() for j in jobs.for_session(sid)],
         "expires_at": store.expires_at(state),
         "ttl_seconds": config.SESSION_TTL_SECONDS,
@@ -79,6 +81,15 @@ class FolderIn(BaseModel):
 class VideoPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=80)
     folder_id: str | None = None
+
+
+class ChatIn(BaseModel):
+    message: str = Field(min_length=1, max_length=3000)
+    thinking: str = "high"  # standard | high | max
+
+
+# chat thinking level -> (reasoning_effort, extra self-check instructions)
+CHAT_THINKING = {"standard": ("medium", False), "high": ("high", False), "max": ("high", True)}
 
 
 class GenerateIn(BaseModel):
@@ -197,6 +208,45 @@ def video_code(video_id: str, download: bool = False, sid: str = Depends(existin
     return PlainTextResponse(code, headers=headers)
 
 
+CHAT_HISTORY_LIMIT = 16  # messages sent back to the model as context
+
+
+@app.get("/api/videos/{video_id}/chat")
+def video_chat(video_id: str, sid: str = Depends(session)):
+    return {"messages": _video_meta(sid, video_id).get("chat", [])}
+
+
+@app.post("/api/videos/{video_id}/chat")
+def ask_about_video(video_id: str, body: ChatIn, sid: str = Depends(session)):
+    """Answer a question about a generated video, using its prompt and code as context."""
+    v = _video_meta(sid, video_id)
+    code_path = store.video_path(sid, video_id, "py")
+    code = code_path.read_text("utf-8") if code_path.is_file() else ""
+    history = v.get("chat", [])[-CHAT_HISTORY_LIMIT:]
+    question = body.message.strip()
+    effort, deep = CHAT_THINKING.get(body.thinking, CHAT_THINKING["high"])
+    messages = [{"role": "system", "content": prompts.chat_system_prompt(v["title"], v["prompt"], code, deep)}]
+    messages += [{"role": m["role"], "content": m["content"]} for m in history]
+    messages.append({"role": "user", "content": question})
+    try:
+        reply = llm.chat(messages, temperature=0.3 if deep else 0.4, effort=effort)
+    except llm.LLMError as e:
+        raise HTTPException(503, str(e))
+    now = time.time()
+    with store.edit(sid) as state:
+        target = next((x for x in state["videos"] if x["id"] == video_id), None)
+        if target is None:
+            raise HTTPException(404, "Video not found")
+        target.setdefault("chat", []).extend([
+            {"role": "user", "content": question, "at": now},
+            {"role": "assistant", "content": reply.text.strip(), "at": time.time(), "model": reply.model,
+             "thinking": body.thinking if body.thinking in CHAT_THINKING else "high"},
+        ])
+        target["chat"] = target["chat"][-60:]
+        messages_out = target["chat"]
+    return {"messages": messages_out}
+
+
 @app.post("/api/generate")
 def generate(body: GenerateIn, sid: str = Depends(session)):
     prompt = body.prompt.strip()
@@ -218,6 +268,15 @@ def job_status(job_id: str, sid: str = Depends(session)):
     if not job:
         raise HTTPException(404, "Job not found")
     return job.public()
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str, sid: str = Depends(session)):
+    if not jobs.get(job_id, sid):
+        raise HTTPException(404, "Job not found")
+    if not jobs.cancel(job_id, sid):
+        raise HTTPException(409, "This animation has already finished")
+    return {"ok": True}
 
 
 @app.exception_handler(ValueError)

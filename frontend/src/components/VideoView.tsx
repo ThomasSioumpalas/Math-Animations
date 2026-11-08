@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Code2, Download, FolderInput, Pencil, Trash2, WandSparkles } from 'lucide-react'
 import { api, type Folder, type Video } from '../api'
 import CodePanel from './CodePanel'
+import VideoPlayer from './VideoPlayer'
+import VideoChat from './VideoChat'
 
 type Props = {
   video: Video
@@ -10,9 +12,10 @@ type Props = {
   onMove: (folderId: string) => Promise<void>
   onDelete: () => Promise<void>
   onRemix: () => void
+  onAnimate: (prompt: string) => void
 }
 
-export default function VideoView({ video, folders, onRename, onMove, onDelete, onRemix }: Props) {
+export default function VideoView({ video, folders, onRename, onMove, onDelete, onRemix, onAnimate }: Props) {
   const [showCode, setShowCode] = useState(false)
   const [code, setCode] = useState('')
   const [editing, setEditing] = useState(false)
@@ -47,9 +50,7 @@ export default function VideoView({ video, folders, onRename, onMove, onDelete, 
         </div>
       </header>
 
-      <div className="player">
-        <video key={video.id} src={api.videoUrl(video.id)} controls autoPlay muted playsInline loop />
-      </div>
+      <VideoPlayer key={video.id} src={api.videoUrl(video.id)} />
 
       <div className="toolbar">
         <a className="primary" href={api.videoUrl(video.id, true)}><Download size={15} /> Download MP4</a>
@@ -64,6 +65,8 @@ export default function VideoView({ video, folders, onRename, onMove, onDelete, 
         <span className="grow" />
         <button className="ghost danger" onClick={() => { if (confirm('Delete this video?')) void onDelete() }}><Trash2 size={15} /> Delete</button>
       </div>
+
+      <VideoChat key={video.id} videoId={video.id} videoTitle={video.title} onAnimate={onAnimate} />
 
       {!!video.layout_notes?.length && (
         <details className="details notes">
