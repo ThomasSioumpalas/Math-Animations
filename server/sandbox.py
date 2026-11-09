@@ -32,7 +32,7 @@ ALLOWED_MODULES = {
     "manim", "numpy", "math", "cmath", "random", "itertools", "functools", "operator",
     "colorsys", "typing", "dataclasses", "collections", "fractions", "decimal",
     "statistics", "string", "enum", "copy", "abc", "__future__", "scipy", "networkx",
-    "textwrap", "studio_kit",
+    "textwrap", "studio_kit", "studio_lesson",
 }
 
 BLOCKED_NAMES = {

@@ -156,15 +156,18 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
     return content
 
 
-def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = None,
+def chat(messages: list[dict], temperature: float = 0.3, prefer: str | list | tuple | None = None,
          should_stop=None, effort: str | None = None, effort_for: dict | None = None) -> Reply:
     """Send a chat request to the first available provider in the chain.
-    `prefer` puts a provider first (used so a fix round stays on the model that wrote the code).
+    `prefer` puts a provider (or an ordered list of providers) first, e.g. the teacher models for
+    lesson plans and chat, or the model that wrote the code for a fix round.
     `effort_for` overrides the reasoning effort for some providers ({provider name: effort})."""
     if not config.ACTIVE_PROVIDERS:
         raise LLMError("No AI provider is configured on the server.")
     _count_call()
-    chain = sorted(config.ACTIVE_PROVIDERS, key=lambda p: p[0] != prefer) if prefer else config.ACTIVE_PROVIDERS
+    order = [prefer] if isinstance(prefer, str) else list(prefer or [])
+    rank = {name: k for k, name in enumerate(order) if name}
+    chain = sorted(config.ACTIVE_PROVIDERS, key=lambda p: rank.get(p[0], len(rank)))
     errors = []
     for _ in range(2):  # second pass: retry anything whose short cooldown has expired
         for name, base, key, model in chain:

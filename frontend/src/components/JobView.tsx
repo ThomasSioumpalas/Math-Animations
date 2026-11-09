@@ -4,7 +4,7 @@ import { ACTIVE, type Job } from '../api'
 import CodePanel from './CodePanel'
 import { duration } from '../util'
 
-const STEPS = ['Queued', 'Writing code', 'Rendering', 'Ready']
+const STEPS = ['Queued', 'Planning', 'Rendering', 'Ready']
 
 function stepIndex(job: Job): number {
   switch (job.status) {

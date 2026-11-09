@@ -85,6 +85,16 @@ VIDEO_REASONING_EFFORT = os.getenv("VIDEO_REASONING_EFFORT", "high")   # writing
 # (~30 tokens/s): on "high" a video took 275 s and once more than 420 s (timed out), on "medium"
 # 152-168 s with code that passed every check first time (2026-11-09 measurements).
 VIDEO_EFFORT_BY_PROVIDER = {"gpt-oss-120b": os.getenv("OSS_VIDEO_EFFORT", "medium")}
+# Lesson plans (server/lesson.py): the teacher model writes a short JSON plan that the kit animates,
+# instead of a whole Manim file. Requests the visuals can't show fall back to code writing.
+LESSON_PLANS = _bool("LESSON_PLANS", True)
+# The "teacher" models: they write lesson plans and answer the chat under each video. Gemini Flash
+# wrote valid plans in 4-29 s; gpt-oss on the free OVH endpoint needed 40-180 s (2026-11-09), so it
+# stays first only for writing code (PROVIDERS order). Missing or busy teachers fall back to the chain.
+TEACHER_ORDER = [s.strip() for s in os.getenv("TEACHER_MODELS", "Gemini 3.6-flash,Gemini 3.8-flash").split(",")
+                 if s.strip()]
+PLAN_REASONING_EFFORT = os.getenv("PLAN_REASONING_EFFORT", "medium")
+PLAN_EFFORT_BY_PROVIDER = {"gpt-oss-120b": os.getenv("OSS_PLAN_EFFORT", "medium")}
 LLM_DAILY_CALL_LIMIT = _int("LLM_DAILY_CALL_LIMIT", 0)  # 0 = no site-wide cap
 
 # --- rendering -----------------------------------------------------------------

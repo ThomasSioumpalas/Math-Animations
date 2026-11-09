@@ -564,7 +564,7 @@ class DataPlot(VGroup):
     """
 
     def __init__(self, x_range=(-5, 5, 1), y_range=(-5, 5, 1), width: float = 5.5, height: float = 4.0,
-                 x_label: str = "x", y_label: str = "y", font_size: int = 20):
+                 x_label: str = "x", y_label: str = "y", font_size: int = 20, x_numbers: bool = True):
         super().__init__()
         self.axes = Axes(x_range=list(x_range), y_range=list(y_range), x_length=width, y_length=height,
                          tips=False, axis_config={"include_numbers": False, "stroke_color": GREY_B})
@@ -572,7 +572,7 @@ class DataPlot(VGroup):
         x0 = 0 if x_range[0] <= 0 <= x_range[1] else x_range[0]
         y0 = 0 if y_range[0] <= 0 <= y_range[1] else y_range[0]
         ticks = VGroup()
-        for v in np.arange(x_range[0], x_range[1] + 1e-9, x_range[2]):
+        for v in (np.arange(x_range[0], x_range[1] + 1e-9, x_range[2]) if x_numbers else []):
             if abs(v - x0) > 1e-9:
                 ticks.add(Text(fmt(v), font_size=font_size, color=GREY_B).next_to(self.axes.c2p(v, y0), DOWN, buff=0.1))
         for v in np.arange(y_range[0], y_range[1] + 1e-9, y_range[2]):

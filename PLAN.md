@@ -28,7 +28,23 @@
                                           Gemini → NVIDIA → Z.ai → OVHcloud (free tiers)
 ```
 
-**The self-repair loop** matters most for quality. LLMs often write Manim code that
+**Lesson plans first (since 2026-11-09).** Writing a whole Manim file took the AI 2–3 minutes and
+was 75–85% of every video's time. Now a *teacher* model (Gemini Flash, `TEACHER_MODELS`) writes
+only a short JSON lesson plan (`server/lesson.py`, prompt `LESSON_SYSTEM`), in 5–30 s:
+- the user's **question** restated, and its direct **answer**;
+- steps of **beats**. A beat is one caption plus one visual action from a fixed vocabulary (grid
+  transforms, determinant and eigenvector views, matrix arithmetic, curves, bars, data points,
+  exact calculations).
+
+`server/kit/studio_lesson.py` animates the plan with the tested kit. Each caption stays on screen
+while its own action plays, so the words always match the picture. Numbers come from numpy, not
+the model. The video opens with the question and ends with an answer card. There is no check run
+and no fix round, just one render. The same teacher model answers the chat under each video.
+
+Requests the vocabulary can't show (motion, drawings, algorithms) come back as `{"kind": "custom"}`
+and go to the code-writing path below, which gpt-oss handles first.
+
+**The self-repair loop** (code path) matters most for quality. LLMs often write Manim code that
 *almost* works: an old API name, LaTeX that isn't installed, a typo. The server sends
 the real traceback back to the model and asks for a fix, up to 2 times. In testing,
 a broken first answer was fixed and rendered on the second try with no user action.

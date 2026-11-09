@@ -273,7 +273,7 @@ def ask_about_video(video_id: str, body: ChatIn, sid: str = Depends(session)):
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
     messages.append({"role": "user", "content": question})
     try:
-        reply = llm.chat(messages, temperature=0.3 if deep else 0.4, effort=effort)
+        reply = llm.chat(messages, temperature=0.3 if deep else 0.4, effort=effort, prefer=config.TEACHER_ORDER)
     except llm.LLMError as e:
         raise HTTPException(503, str(e))
     now = time.time()

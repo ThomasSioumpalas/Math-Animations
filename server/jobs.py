@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 
-from . import config, llm, prompts, sandbox
+from . import config, lesson, llm, prompts, sandbox
 from .storage import new_id, store
 
 
@@ -150,8 +150,53 @@ def _ask(job: Job, user_content: str, temperature: float) -> str:
     return sandbox.extract_code(reply.text)
 
 
+def _plan(job: Job) -> dict | None:
+    """The teacher model's lesson plan, or None when the request needs custom code."""
+    messages = [{"role": "system", "content": prompts.LESSON_SYSTEM},
+                {"role": "user", "content": prompts.lesson_user_prompt(job.prompt)}]
+    for attempt in range(2):
+        reply = llm.chat(messages, temperature=0.4, prefer=config.TEACHER_ORDER,
+                         should_stop=lambda: job.status == "cancelled", effort=config.PLAN_REASONING_EFFORT,
+                         effort_for=config.PLAN_EFFORT_BY_PROVIDER)
+        _check(job)
+        job.provider, job.model = reply.provider, reply.model
+        try:
+            plan = lesson.normalize(lesson.parse(reply.text))
+        except lesson.PlanError as e:
+            print(f"[plan] {job.id}: unusable plan ({e})", flush=True)
+            messages[1]["content"] = prompts.lesson_retry_prompt(job.prompt, reply.text, str(e))
+            continue
+        return None if plan["kind"] != "lesson" else plan
+    return None
+
+
+def _run_lesson(job: Job) -> bool:
+    """Prompt -> lesson plan -> one render. False means: use the code-writing path instead."""
+    _set(job, status="writing", message="The AI teacher is planning the explanation…", attempt=1)
+    plan = _plan(job)
+    if plan is None:
+        print(f"[plan] {job.id}: no lesson plan for this request, writing code instead", flush=True)
+        job.provider = job.model = ""
+        return False
+    code = lesson.to_code(plan)
+    if problems := sandbox.validate(code):
+        print(f"[plan] {job.id}: generated scene rejected: {problems}", flush=True)
+        return False
+    job.code, job.title = code, sandbox.extract_title(code, job.prompt)
+    final = _final_render(job, code, lesson.estimate_seconds(plan), label="Animating the explanation")
+    if final.ok:
+        job.layout_notes = []
+        _save(job, final.video)
+        return True
+    print(f"[plan] {job.id}: lesson render failed, writing code instead: "
+          f"{final.error.strip().splitlines()[-1][:300] if final.error.strip() else '?'}", flush=True)
+    job.provider = job.model = ""
+    return False
+
+
 def _run(job: Job) -> None:
-    """Write -> quick check (no frames drawn, seconds) -> fix -> ... -> ONE real render at the chosen quality.
+    """Lesson plan first (fast: a short JSON plan, then one render). Otherwise, or if that fails:
+    write code -> quick check (no frames drawn, seconds) -> fix -> ... -> ONE real render.
     Crashes and the length limit always get fix rounds; layout-only problems get at most
     MAX_LAYOUT_FIX_ROUNDS, because most are prevented by the kit and each round costs a full AI call."""
     work = config.WORK_DIR / job.id
@@ -159,6 +204,8 @@ def _run(job: Job) -> None:
     layout_rounds = 0
     try:
         _check(job)  # cancelled while still queued
+        if config.LESSON_PLANS and _run_lesson(job):
+            return
         _set(job, status="writing", message="AI is planning the storyboard and writing the Manim code…", attempt=1)
         code = _ask(job, prompts.user_prompt(job.prompt), 0.4)
 
@@ -224,11 +271,11 @@ def _run(job: Job) -> None:
         store.unpin(job.sid)
 
 
-def _final_render(job: Job, code: str, video_seconds: float = 0.0):
+def _final_render(job: Job, code: str, video_seconds: float = 0.0, label: str = ""):
     """The one real render, at the quality the user picked (default 720p)."""
     _check(job)
-    label = {"low": "480p", "medium": "720p", "high": "1080p"}.get(job.quality, job.quality)
-    base = f"All checks passed. Rendering the {label} video"
+    res = {"low": "480p", "medium": "720p", "high": "1080p"}.get(job.quality, job.quality)
+    base = f"{label} ({res})" if label else f"All checks passed. Rendering the {res} video"
     _set(job, status="rendering", message=base + "…")
 
     def progress(done: float) -> None:   # seconds of video rendered so far (from the renderer)
