@@ -104,7 +104,7 @@ def _fail_on_status(name: str, status: int, text: str, retry_after: str) -> None
 
 
 def _call(name: str, base: str, key: str, model: str, messages: list[dict], temperature: float,
-          should_stop=None, effort: str | None = None) -> str:
+          should_stop=None, effort: str | None = None, silence_s: int | None = None) -> str:
     """Streamed request. Fails fast when the provider produces nothing within
     LLM_FIRST_TOKEN_SECONDS (overloaded free tiers often just hang), so the chain moves on."""
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
@@ -114,7 +114,8 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
             "max_tokens": config.LLM_MAX_TOKENS, "stream": True}
     if effort:
         body["reasoning_effort"] = effort
-    timeout = httpx.Timeout(connect=20, read=config.LLM_FIRST_TOKEN_SECONDS, write=30, pool=20)
+    silence_s = silence_s or config.LLM_FIRST_TOKEN_SECONDS
+    timeout = httpx.Timeout(connect=20, read=silence_s, write=30, pool=20)
     deadline = time.time() + config.LLM_TIMEOUT_SECONDS
     parts: list[str] = []
     try:
@@ -148,7 +149,7 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
                         parts.append(piece)
     except httpx.ReadTimeout:
         _cool(name, 180)
-        raise LLMError(f"{name}: no output for {config.LLM_FIRST_TOKEN_SECONDS}s (overloaded?)")
+        raise LLMError(f"{name}: no output for {silence_s}s (overloaded?)")
     content = "".join(parts)
     if not content.strip():
         _cool(name, 60)
@@ -157,7 +158,8 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
 
 
 def chat(messages: list[dict], temperature: float = 0.3, prefer: str | list | tuple | None = None,
-         should_stop=None, effort: str | None = None, effort_for: dict | None = None) -> Reply:
+         should_stop=None, effort: str | None = None, effort_for: dict | None = None,
+         silence_s: int | None = None) -> Reply:
     """Send a chat request to the first available provider in the chain.
     `prefer` puts a provider (or an ordered list of providers) first, e.g. the teacher models for
     lesson plans and chat, or the model that wrote the code for a fix round.
@@ -178,7 +180,7 @@ def chat(messages: list[dict], temperature: float = 0.3, prefer: str | list | tu
             t0 = time.time()
             try:
                 text = _call(name, base, key, model, messages, temperature, should_stop,
-                             (effort_for or {}).get(name, effort))
+                             (effort_for or {}).get(name, effort), silence_s)
                 print(f"[llm] {name} ({model}) answered in {time.time() - t0:.0f}s", flush=True)
                 return Reply(text, name, model)
             except httpx.HTTPError as e:

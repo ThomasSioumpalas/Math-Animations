@@ -53,7 +53,9 @@ _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 _GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 # Several Gemini models in a row: each has its own free quota, and when the newest one is
 # overloaded (free tier gets the lowest priority) the next one usually answers in seconds.
-_GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.8-flash,gemini-3.6-flash").split(",") if m.strip()]
+_GEMINI_MODELS = [m.strip() for m in os.getenv(
+    "GEMINI_MODELS", "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite").split(",")
+    if m.strip()]
 _OVH_BASE = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
 _OVH_KEY = "anonymous" if _bool("OVH_ENABLED", True) else ""   # keyless: 2 requests/min per IP per model
 PROVIDERS = [
@@ -91,8 +93,11 @@ LESSON_PLANS = _bool("LESSON_PLANS", True)
 # The "teacher" models: they write lesson plans and answer the chat under each video. Gemini Flash
 # wrote valid plans in 4-29 s; gpt-oss on the free OVH endpoint needed 40-180 s (2026-11-09), so it
 # stays first only for writing code (PROVIDERS order). Missing or busy teachers fall back to the chain.
-TEACHER_ORDER = [s.strip() for s in os.getenv("TEACHER_MODELS", "Gemini 3.6-flash,Gemini 3.8-flash").split(",")
-                 if s.strip()]
+TEACHER_ORDER = [s.strip() for s in os.getenv(
+    "TEACHER_MODELS", "Gemini 3.6-flash,Gemini 3.7-flash,Gemini 3.8-flash,Gemini 3.5-flash,Gemini 3.5-flash-lite").split(",")
+    if s.strip()]
+# A teacher that stays silent this long is skipped (overloaded free tiers often hang instead of failing).
+TEACHER_SILENCE_SECONDS = _int("TEACHER_SILENCE_SECONDS", 35)
 PLAN_REASONING_EFFORT = os.getenv("PLAN_REASONING_EFFORT", "medium")
 PLAN_EFFORT_BY_PROVIDER = {"gpt-oss-120b": os.getenv("OSS_PLAN_EFFORT", "medium")}
 LLM_DAILY_CALL_LIMIT = _int("LLM_DAILY_CALL_LIMIT", 0)  # 0 = no site-wide cap

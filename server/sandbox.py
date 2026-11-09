@@ -175,6 +175,7 @@ class RenderResult:
     warnings: list = field(default_factory=list)  # layout problems found while rendering
     log: str = ""                                 # tail of the renderer output (diagnostics)
     duration: float = 0.0                         # length of the video in seconds (known after a check)
+    skipped: list = field(default_factory=list)   # lesson beats the renderer had to skip ("[lesson] ..." lines)
 
 
 QUALITY = {"low": "low_quality", "medium": "medium_quality", "high": "high_quality"}
@@ -294,7 +295,8 @@ def render(code: str, work: Path, quality: str = "low", on_start=None, timeout: 
         return RenderResult(True, None, "", time.time() - t0, warnings[:12], log[-2000:],
                             float(d.group(1)) if d else 0.0)
     if proc.returncode == 0 and m and Path(m.group(1).strip()).is_file():
-        return RenderResult(True, Path(m.group(1).strip()), "", time.time() - t0, warnings[:12], log[-2000:])
+        return RenderResult(True, Path(m.group(1).strip()), "", time.time() - t0, warnings[:12], log[-2000:],
+                            skipped=re.findall(r"^\[lesson\] (.+)$", log, re.M)[:20])
     if proc.returncode and proc.returncode < 0:
         log += f"\n(renderer killed by signal {-proc.returncode}; probably out of memory or CPU time)"
     return RenderResult(False, None, _trim_log(log), time.time() - t0)

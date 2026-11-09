@@ -20,9 +20,9 @@ import sys
 
 import numpy as np
 from manim import (
-    BLACK, BLUE, DEGREES, DOWN, GOLD, GREEN, GREY_B, LEFT, ORANGE, PURPLE, RED, TEAL, UP, UR, WHITE, YELLOW,
-    AnimationGroup, Create, DashedLine, Dot, FadeIn, FadeOut, GrowFromEdge, Indicate, Line, Rectangle, Text,
-    ThreeDScene, VGroup,
+    BLACK, BLUE, DEGREES, DOWN, GOLD, GREEN, GREY_B, LEFT, ORANGE, PURPLE, RED, RIGHT, TEAL, UP, UR, WHITE, YELLOW,
+    AnimationGroup, Create, DashedLine, Dot, FadeIn, FadeOut, GrowFromEdge, Indicate, LaggedStart, Line, ManimColor,
+    Rectangle, Text, ThreeDScene, VGroup, interpolate_color,
 )
 from studio_kit import (
     DataPlot, Narrator, NumberMatrix, _caption_chunks, _wrap, animate_transpose, boxed, clear_stage, fit_to,
@@ -30,9 +30,19 @@ from studio_kit import (
 )
 from studio_space import Plane2D, Space3D
 
+import lesson_math as LM
+from lesson_ml import MLActions
+
 COLORS = {"yellow": YELLOW, "blue": BLUE, "green": GREEN, "red": RED, "orange": ORANGE, "purple": PURPLE,
           "pink": "#FF86C8", "teal": TEAL, "white": WHITE, "grey": GREY_B, "gray": GREY_B, "gold": GOLD}
 SERIES = [YELLOW, "#FF86C8", ORANGE, TEAL, PURPLE, BLUE, GOLD]
+NEG_COLOR, POS_COLOR = ManimColor("#3B6FD8"), ManimColor("#E5533D")
+
+
+def _diverging(t: float):
+    """Blue (-1) -> white (0) -> red (+1)."""
+    t = float(np.clip(t, -1, 1))
+    return interpolate_color(ManimColor(WHITE), POS_COLOR if t >= 0 else NEG_COLOR, abs(t))
 
 
 def play_lesson(scene, plan: dict) -> None:
@@ -110,7 +120,7 @@ def _nice_range(lo: float, hi: float, max_ticks: int = 8):
 
 
 # ------------------------------------------------------------------ the player --
-class _Lesson:
+class _Lesson(MLActions):
     def __init__(self, scene, plan: dict):
         self.s, self.plan = scene, plan if isinstance(plan, dict) else {}
         self.n = Narrator(scene)
@@ -126,6 +136,9 @@ class _Lesson:
         self.graphs: dict[str, object] = {}      # plot curves: id -> graph
         self.fits: dict[str, list] = {}          # plot points id -> its fitted line + label
         self.carry = {"square": False, "det": False}   # grid features a new grid shows again
+        self.display: dict[str, object] = {}     # matrices view: id -> what is on screen for it (table = matrix + headers)
+        self.board: list = []                    # text view: formula lines stacked in the middle of the screen
+        self._ml_reset()
         self.note = None
         self.temp: list = []                     # highlights that go at the next beat
         self.loose: list = []                    # extra objects in the matrices view (e.g. a product's  A · B →)
@@ -137,18 +150,27 @@ class _Lesson:
         title = str(self.plan.get("title") or "").strip()
         if title:
             set_title(self.s, title)
-        question = str(self.plan.get("question") or "").strip()
+        question = LM.fill(str(self.plan.get("question") or "").strip(), self.named)
         if question:
-            self.n.say(question if question.endswith("?") else question)
+            self._question_card(question)
         for k, step in enumerate(steps):
             self._start_step(step, steps[k:])
             for beat in step.get("beats") or []:
                 if isinstance(beat, dict):
                     self._beat(beat)
         self._clear_temp()
-        answer = str(self.plan.get("answer") or "").strip()
+        answer = LM.fill(str(self.plan.get("answer") or "").strip(), self.named)
         if answer:
             self._answer_card(answer)
+
+    def _question_card(self, question: str) -> None:
+        """The question, big and centered, before the first picture (not a small caption on an empty screen)."""
+        card = Text(_wrap(question, 46), font_size=36, line_spacing=1.0)
+        fit_to(card, "main")
+        hud(self.s, card)
+        self.s.play(FadeIn(card, shift=UP * 0.2), run_time=0.8)
+        self.s.wait(max(2.0, 0.28 * len(question.split())))
+        self.s.play(FadeOut(card), run_time=0.5)
 
     def _answer_card(self, answer: str) -> None:
         """The answer to the user's question, big and centered over the dimmed last picture. (The last
@@ -162,7 +184,7 @@ class _Lesson:
         fit_to(card, "main")
         hud(self.s, card)
         set_title(self.s, "The answer")
-        self.s.play(*(m.animate.set_opacity(0.18) for m in dim), FadeIn(card), run_time=1.0)
+        self.s.play(*(m.animate.fade(0.82) for m in dim), FadeIn(card), run_time=1.0)
         self.s.wait(max(3.0, 0.32 * len(answer.split())) + 1.0)
 
     def _start_step(self, step: dict, rest: list) -> None:
@@ -202,7 +224,8 @@ class _Lesson:
 
     def _new_view(self, vtype: str, view: dict, rest: list) -> None:
         self.mats, self.zones, self.vecs, self.series, self.graphs, self.loose = {}, {}, {}, {}, {}, []
-        self.fits = {}
+        self.fits, self.display, self.board = {}, {}, []
+        self._ml_reset()
         self.stage = self.plot = None
         if self.three_d and vtype != "space":   # flat views in a 3-D video: look straight at the screen again
             try:
@@ -227,6 +250,12 @@ class _Lesson:
         elif vtype == "plot":
             self._build_plot(view, beats)
             self.view = "plot"
+        elif vtype == "contour":
+            self._build_contour(view)
+            self.view = "contour"
+        elif vtype == "network":
+            self._build_network(view)
+            self.view = "network"
         elif vtype == "matrices":
             self.view = "matrices"
         else:
@@ -272,8 +301,9 @@ class _Lesson:
     # ---------------------------------------------------------------- beats
     def _beat(self, b: dict) -> None:
         self._clear_temp()
-        say = str(b.get("say") or "").strip()
         do = str(b.get("do") or "").strip().lower()
+        self._predefine(b, do)   # values this beat creates can already be quoted in its caption
+        say = LM.fill(str(b.get("say") or "").strip(), self.named)
         read = 0.0
         if say:
             chunks = _caption_chunks(say, self.n.cpl)
@@ -293,6 +323,21 @@ class _Lesson:
                     _warn(f"action '{do}' skipped: {type(e).__name__}: {e}")
         spent = self.s.renderer.time - t0
         self.s.wait(max(0.5, read - spent))
+
+    def _predefine(self, b: dict, do: str) -> None:
+        name = b.get("name")
+        try:
+            if do == "data":
+                self._define_data(b)
+            elif do == "matrix" and isinstance(name, str):
+                self.named[name] = self._matrix_values(b)
+            elif do in ("show_matrix", "vector") and isinstance(name, str):
+                v = b.get("matrix") if do == "show_matrix" else b.get("coords")
+                self.named[name] = self._arr(v)
+            elif do == "multiply" and isinstance(b.get("name"), str):
+                self.named[name] = np.atleast_2d(self._arr(b.get("a"))) @ np.atleast_2d(self._arr(b.get("b")))
+        except Exception:
+            pass
 
     def _caption(self, text: str) -> None:
         """Show a caption WITHOUT waiting: the beat's action plays while it is read."""
@@ -334,7 +379,7 @@ class _Lesson:
         return c
 
     def _need(self, *views):
-        if self.view not in views:
+        if self.view not in views and not (self.view == "contour" and "plot" in views):
             raise ValueError(f"needs a {' or '.join(views)} view (current: {self.view or 'none'})")
 
     # ---------------------------------------------------------------- notes & calculations
@@ -347,13 +392,33 @@ class _Lesson:
                 mob.scale_to_fit_width(6.4)
             self.note = self.stage.panel(mob, corner=UR)
             return
+        if self.view == "text":   # nothing else on screen: formulas big, in the middle, stacking downwards
+            mob = Text(text, font_size=36, color=color)
+            if mob.width > 12.6:
+                mob.scale_to_fit_width(12.6)
+            anims = []
+            if len(self.board) >= 5:
+                old = self.board.pop(0)
+                anims = [FadeOut(old)] + [m.animate.shift(UP * 0.9) for m in self.board]
+            mob.move_to([0, 2.35 - 0.9 * len(self.board), 0])
+            hud(self.s, mob)
+            self.s.play(*anims, FadeIn(mob, shift=UP * 0.15), run_time=0.7)
+            self.board.append(mob)
+            return
         mob = work_text(text, color=color)
         hud(self.s, mob)
-        self.s.play(FadeIn(mob), run_time=0.6)
+        old = []
+        if getattr(self, "status", None) is not None:   # a status line sits where the note goes
+            if self.plot is not None and self.status in self.plot:
+                self.plot.remove(self.status)
+                self.s.add(self.status)
+            old = [self.status]
+        self.status = None
+        self.s.play(FadeIn(mob), *(FadeOut(m) for m in old), run_time=0.6)
         self.note = mob
 
     def _do_note(self, b):
-        self._show_note(str(b.get("text") or "").strip(), self._color(b, WHITE))
+        self._show_note(LM.fill(str(b.get("text") or "").strip(), self.named), self._color(b, WHITE))
 
     def _do_calc(self, b):
         self._show_note(self._calc_text(b), COLORS["yellow"] if b.get("highlight") else WHITE)
@@ -434,6 +499,18 @@ class _Lesson:
             if what in ("variance", "var"):
                 return var_txt
             return f"std = √{fmt(var)} = {fmt(np.sqrt(var))}"
+        if what in ("covariance", "cov", "correlation", "corr"):
+            a, c = self._arr(b.get("a")).ravel(), self._arr(b.get("b")).ravel()
+            an, cn = label("a", "X"), label("b", "Y")
+            ma, mc = a.mean(), c.mean()
+            terms = " + ".join(f"({fmt(x - ma)})·({fmt(y - mc)})" for x, y in zip(a[:4], c[:4]))
+            terms += " + …" if len(a) > 4 else ""
+            cov = float(((a - ma) * (c - mc)).mean())
+            if what in ("covariance", "cov"):
+                return f"cov({an}, {cn}) = ({terms}) / {len(a)} = {fmt(cov)}"
+            sa, sc = float(a.std()), float(c.std())
+            r = cov / (sa * sc) if sa * sc > 0 else 0.0
+            return f"r({an}, {cn}) = cov({an}, {cn}) / (σ{an}·σ{cn}) = {fmt(cov)} / ({fmt(sa)}·{fmt(sc)}) = {fmt(r)}"
         if what in ("expectation", "expected"):
             x, p = self._arr(b.get("values")).ravel(), self._arr(b.get("probs")).ravel()
             terms = " + ".join(f"{fmt(v)}·{fmt(q)}" for v, q in zip(x, p))
@@ -524,28 +601,114 @@ class _Lesson:
         self.stage.orbit()
 
     # ---------------------------------------------------------------- matrices view
-    def _place(self, M: NumberMatrix, at: str, mid: str) -> None:
-        """Put a matrix in a zone; whatever sat there (or overlaps it) fades out first."""
+    def _place(self, shown, at: str, mid: str, M: NumberMatrix | None = None) -> None:
+        """Put a matrix (or a table: matrix + headers) in a zone; whatever sat there fades out first."""
         at = at if at in ("left", "right", "main") else ("left" if "left" not in self.zones else
                                                          "right" if "right" not in self.zones else "main")
         clash = {"main": ("left", "right", "main"), "left": ("left", "main"), "right": ("right", "main")}[at]
-        old = [self.mats.pop(self.zones.pop(z)) for z in clash if z in self.zones and self.zones[z] in self.mats]
+        old = []
+        for z in clash:
+            if z in self.zones:
+                gone = self.zones.pop(z)
+                old.append(self.display.pop(gone, None) or self.mats.get(gone))
+                self.mats.pop(gone, None)
+        old = [m for m in old if m is not None and m in self.s.mobjects]
         old += [m for m in self.loose if m in self.s.mobjects]
         self.loose = []
         if old:
             self.s.play(*(FadeOut(m) for m in old), run_time=0.4)
-        fit_to(M, at)
+        fit_to(shown, at)
         self.zones[at] = mid
-        self.mats[mid] = M
+        self.display[mid] = shown
+        self.mats[mid] = M if M is not None else shown
+
+    def _matrix_values(self, b) -> np.ndarray:
+        if b.get("compute"):
+            return np.atleast_2d(LM.compute(b["compute"], b, self.named))
+        return np.atleast_2d(self._arr(b.get("values") if b.get("values") is not None else b.get("matrix")))
 
     def _do_matrix(self, b):
         self._need("matrices")
         mid = str(b.get("name") or b.get("id") or f"M{len(self.mats) + 1}")
-        vals = np.atleast_2d(self._arr(b.get("values") if b.get("values") is not None else b.get("matrix")))
+        vals = self._matrix_values(b)
         self.named[mid] = vals
         M = NumberMatrix(vals, name=mid)
         self._place(M, str(b.get("at") or ""), mid)
         self.s.play(FadeIn(M), run_time=0.8)
+
+    def _define_data(self, b):
+        cols = b.get("columns") or {}
+        if isinstance(cols, list):   # [{"name": "X", "values": [...]}, ...]
+            cols = {str(c.get("name")): c.get("values") for c in cols if isinstance(c, dict)}
+        names = [str(k) for k in cols]
+        vals = [np.asarray(v, float).ravel() for v in cols.values()]
+        if not vals or len({len(v) for v in vals}) != 1:
+            raise ValueError("data needs columns of equal length")
+        for n_, v in zip(names, vals):
+            self.named[n_] = v
+        D = np.column_stack(vals)
+        dname = str(b.get("name") or "data")
+        self.named[dname] = D
+        return names, D, dname
+
+    def _do_data(self, b):
+        """A dataset as a table: one column per variable, its name on top (rows = samples)."""
+        self._need("matrices")
+        names, D, dname = self._define_data(b)
+        M = NumberMatrix(D, name=None)
+        heads = VGroup(*(Text(n_, font_size=30, color=YELLOW) for n_ in names))
+        for j, h in enumerate(heads):
+            h.next_to(M.col(j), UP, buff=0.45)
+        top = max(h.get_center()[1] for h in heads)
+        for h in heads:
+            h.set_y(top)
+        table = VGroup(M, heads)
+        self._place(table, str(b.get("at") or ""), dname, M)
+        self.s.play(FadeIn(M), FadeIn(heads, shift=DOWN * 0.1), run_time=0.9)
+
+    def _legend(self, m: float) -> VGroup:
+        n = 9
+        bar = VGroup(*(Rectangle(width=0.32, height=0.26, fill_color=_diverging(1 - 2 * k / (n - 1)),
+                                 fill_opacity=0.95, stroke_width=0) for k in range(n))).arrange(DOWN, buff=0)
+        labels = VGroup(Text(fmt(m), font_size=22).next_to(bar[0], RIGHT, buff=0.12),
+                        Text("0", font_size=22).next_to(bar[n // 2], RIGHT, buff=0.12),
+                        Text(fmt(-m), font_size=22).next_to(bar[-1], RIGHT, buff=0.12))
+        return VGroup(bar, labels)
+
+    def _do_heatmap(self, b):
+        """Color every cell of a matrix on screen by its value: blue (negative), white (0), red (positive)."""
+        self._need("matrices")
+        mid = str(b.get("name") or b.get("id") or "")
+        M = self._on_screen(mid)
+        V = M.values
+        rows, cols = V.shape
+        m = 1.0 if np.all(np.abs(V) <= 1 + 1e-9) else float(np.abs(V).max() or 1)
+        cx = [M.cell(0, j).get_center()[0] for j in range(cols)]
+        hw = [max(M.cell(i, j).width for i in range(rows)) / 2 for j in range(cols)]
+        gap = ((cx[1] - hw[1]) - (cx[0] + hw[0])) if cols > 1 else 0.3
+        bounds = []
+        for j in range(cols):
+            left = (cx[j - 1] + hw[j - 1] + cx[j] - hw[j]) / 2 if j > 0 else cx[j] - hw[j] - gap / 2
+            right = (cx[j] + hw[j] + cx[j + 1] - hw[j + 1]) / 2 if j < cols - 1 else cx[j] + hw[j] + gap / 2
+            bounds.append((left, right))
+        cy = [M.cell(i, 0).get_center()[1] for i in range(rows)]
+        pitch = (cy[0] - cy[1]) if rows > 1 else M.cell(0, 0).height * 2.2
+        rects, recolor = VGroup(), []
+        for i in range(rows):
+            for j in range(cols):
+                t = V[i, j] / m
+                left, right = bounds[j]
+                rects.add(Rectangle(width=(right - left) * 0.97, height=pitch * 0.94, fill_color=_diverging(t),
+                                    fill_opacity=0.92, stroke_width=0).move_to([(left + right) / 2, cy[i], 0]))
+                recolor.append(M.cell(i, j).animate.set_color(BLACK if abs(t) < 0.6 else WHITE))
+        legend = self._legend(m)
+        legend.next_to(M, RIGHT, buff=0.5)
+        if legend.get_right()[0] > 6.9 or any(z == "right" and v != mid for z, v in self.zones.items()):
+            legend.rotate(0).next_to(M, DOWN, buff=0.35)
+        self.s.play(LaggedStart(*(FadeIn(r) for r in rects), lag_ratio=0.05), *recolor, FadeIn(legend), run_time=1.6)
+        self.s.remove(*rects)
+        M.add_to_back(rects)
+        self.loose.append(legend)
 
     def _on_screen(self, key) -> NumberMatrix:
         if isinstance(key, str) and key in self.mats:
@@ -557,10 +720,10 @@ class _Lesson:
         A, B = np.atleast_2d(self._arr(b.get("a"))), np.atleast_2d(self._arr(b.get("b")))
         an, bn = str(b.get("a")) if isinstance(b.get("a"), str) else "A", str(b.get("b")) if isinstance(b.get("b"), str) else "B"
         name = str(b.get("name") or b.get("result") or "C")
-        gone = [m for m in list(self.mats.values()) + self.loose if m in self.s.mobjects]
+        gone = [m for m in list(self.display.values()) + list(self.mats.values()) + self.loose if m in self.s.mobjects]
         if gone:
             self.s.play(*(FadeOut(m) for m in gone), run_time=0.4)
-        self.mats, self.zones, self.loose = {}, {}, []
+        self.mats, self.zones, self.loose, self.display = {}, {}, [], {}
         before = {id(m) for m in self.s.mobjects}
         C = show_matrix_product(self.s, A, B, name=name, a_name=an, b_name=bn)
         self.named[name] = A @ B
@@ -640,7 +803,13 @@ class _Lesson:
             try:
                 if do in ("points", "move_points"):
                     key = str(b.get("name") or b.get("id") or "")
-                    if b.get("data") is not None:
+                    if do == "points" and b.get("x") is not None and b.get("y") is not None:
+                        d = self._points_data(b)
+                        if isinstance(b.get("x"), str):
+                            view.setdefault("x_label", b["x"])
+                        if isinstance(b.get("y"), str):
+                            view.setdefault("y_label", b["y"])
+                    elif b.get("data") is not None:
                         d = np.atleast_2d(np.asarray(b.get("data"), float))
                     else:   # an op on earlier points: compute where they will go
                         d = series.get(key, next(iter(series.values()), None)) if series else None
@@ -651,6 +820,10 @@ class _Lesson:
                         d = np.hstack([d, np.zeros_like(d)])
                     series[key] = d
                     xs += list(d[:, 0]); ys += list(d[:, 1])
+                elif do in ("histogram", "series", "knn"):
+                    ex, ey = self._ml_extent(b, do)
+                    xs += list(ex)
+                    ys += list(ey)
                 elif do == "bars":
                     bars = max(bars, len(b.get("values") or []))
                     ys += [float(v) for v in b.get("values") or []]
@@ -670,11 +843,14 @@ class _Lesson:
             xlo, xhi, xstep = _nice_range(*x_range[:2])
         elif xs:
             pad = 0.1 * (max(xs) - min(xs) or 2)
-            xlo, xhi, xstep = _nice_range(min(xs + [0]) - pad, max(xs + [0]) + pad)
+            lo, hi = min(xs), max(xs)
+            if (0 < lo < 0.5 * hi) or (lo * 0.5 > hi < 0):
+                lo, hi = min(lo, 0.0), max(hi, 0.0)
+            xlo, xhi, xstep = _nice_range(lo - pad, hi + pad)
         else:
             xlo, xhi, xstep = -5.0, 5.0, 1.0
         for b in beats:  # curves decide the y range over the chosen x range
-            if str(b.get("do") or "").lower() in ("curve", "area") and b.get("f"):
+            if str(b.get("do") or "").lower() in ("curve", "area", "descent") and b.get("f"):
                 try:
                     yy = formula(b["f"])(np.linspace(xlo, xhi, 200))
                     yy = yy[np.isfinite(yy)]
@@ -687,7 +863,10 @@ class _Lesson:
         if y_range and len(y_range) >= 2:
             ylo, yhi, ystep = _nice_range(*y_range[:2], max_ticks=6)
         else:
-            lo, hi = min(ys), max(ys)
+            data_ys = ys[1:] or [0.0]   # ys[0] is a 0 placeholder: only keep 0 when it is near the data
+            lo, hi = min(data_ys), max(data_ys)
+            if bars or (0 <= lo < 0.5 * hi) or (lo * 0.5 > hi < 0) or lo <= 0 <= hi:
+                lo, hi = min(lo, 0.0), max(hi, 0.0)
             pad = (0.35 if bars else 0.12) * (hi - lo or 1)   # bars: room for value labels + markers
             ylo, yhi, ystep = _nice_range(lo - (pad if lo < 0 else 0), hi + pad, max_ticks=6)
         self.plot = DataPlot(x_range=(xlo, xhi, xstep), y_range=(ylo, yhi, ystep), width=8.6, height=3.9,
@@ -791,12 +970,25 @@ class _Lesson:
                                   color=self._color(b))
             return
         self._need("plot")
-        data = np.atleast_2d(np.asarray(b.get("data"), float))
+        data = self._points_data(b)
         if data.shape[1] == 1:
             data = np.hstack([data, np.zeros_like(data)])
-        dots = self.plot.dots(data[:, :2], color=self._color(b, BLUE))
-        self.s.play(FadeIn(dots, lag_ratio=0.05), run_time=1.0)
-        self.series[str(b.get("name") or b.get("id") or f"p{len(self.series)}")] = (dots, data[:, :2])
+        key = str(b.get("name") or b.get("id") or f"p{len(self.series)}")
+        if b.get("labels"):   # one class label per point: colored by class, with a legend
+            dots, legend = self._class_dots(key, data, b["labels"])
+            data = data[: len(dots)]
+            self.s.play(FadeIn(dots, lag_ratio=0.05), FadeIn(legend), run_time=1.0)
+            self._adopt(legend)
+        else:
+            dots = self.plot.dots(data[:, :2], color=self._color(b, BLUE))
+            self.s.play(FadeIn(dots, lag_ratio=0.05), run_time=1.0)
+        self.series[key] = (dots, data[:, :2])
+
+    def _points_data(self, b) -> np.ndarray:
+        """[[x, y], ...] from "data", or from two columns: "x": "X", "y": "Y" (names or lists)."""
+        if b.get("x") is not None and b.get("y") is not None:
+            return np.column_stack([self._arr(b["x"]).ravel(), self._arr(b["y"]).ravel()])
+        return np.atleast_2d(np.asarray(b.get("data"), float))
 
     def _series(self, b):
         key = b.get("name") or b.get("id")
@@ -834,7 +1026,9 @@ class _Lesson:
         color = self._color(b, ORANGE)
         line = Line(self._xy(xlo, slope * xlo + icept), self._xy(xhi, slope * xhi + icept), color=color, stroke_width=4)
         sign = "+" if icept >= 0 else "−"
-        lab = boxed(f"y = {fmt(slope)}·x {sign} {fmt(abs(icept))}", color=color, font_size=24, opacity=0.7)
+        r = float(np.corrcoef(x, y)[0, 1]) if np.std(x) > 0 and np.std(y) > 0 else 0.0
+        lab = boxed(f"y = {fmt(slope)}·x {sign} {fmt(abs(icept))}   (r = {fmt(r)})", color=color, font_size=24,
+                    opacity=0.7)
         lab.next_to(line.get_end(), UP + LEFT, buff=0.1)
         if lab.get_right()[0] > 6.8:
             lab.shift(LEFT * (lab.get_right()[0] - 6.8))

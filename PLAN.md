@@ -41,6 +41,29 @@ while its own action plays, so the words always match the picture. Numbers come 
 the model. The video opens with the question and ends with an answer card. There is no check run
 and no fix round, just one render. The same teacher model answers the chat under each video.
 
+**Visual vocabulary.** The site teaches the math behind ML, so grids are only one picture among many:
+- **Grids:** 2-D/3-D transformations.
+- **Data:** tables, computed matrices (correlation, covariance, …) and heatmaps.
+- **Plots:** curves, bars, histograms, line charts.
+- **ML views:** classification with decision boundaries and k-NN, regression residuals and polynomial
+  fits, PCA and projections, k-means, and gradient descent on a curve or on a contour map of a loss
+  surface (`server/kit/lesson_ml.py`).
+- **Networks:** neural-network diagrams.
+
+The teacher prompt maps each kind of idea to the picture that shows it best and encourages showing one
+idea in two pictures. Numbers in captions are `{templates}` the renderer fills in, such as `{det(R)}`
+and `{corr(X, Y)}`, so the model never states a computed value itself.
+
+**Plan checker.** `lesson.check` dry-runs every plan before rendering and catches:
+- unknown actions, or actions in the wrong view;
+- undefined names and wrong matrix sizes;
+- templates that can't be computed;
+- views that never draw anything.
+
+The problems go back to the teacher once. Whatever would still fail is dropped together with its
+caption (`lesson.prune`), so no caption describes a picture that never appears. The renderer logs any
+beat it still had to skip.
+
 Requests the vocabulary can't show (motion, drawings, algorithms) come back as `{"kind": "custom"}`
 and go to the code-writing path below, which gpt-oss handles first.
 

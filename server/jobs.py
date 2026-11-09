@@ -152,22 +152,36 @@ def _ask(job: Job, user_content: str, temperature: float) -> str:
 
 def _plan(job: Job) -> dict | None:
     """The teacher model's lesson plan, or None when the request needs custom code."""
-    messages = [{"role": "system", "content": prompts.LESSON_SYSTEM},
-                {"role": "user", "content": prompts.lesson_user_prompt(job.prompt)}]
-    for attempt in range(2):
+    base = [{"role": "system", "content": prompts.LESSON_SYSTEM},
+            {"role": "user", "content": prompts.lesson_user_prompt(job.prompt)}]
+    messages, best, best_problems = base, None, None
+    for attempt in range(2):   # the plan + one round to fix what the checker found (time budget: ~2 min)
         reply = llm.chat(messages, temperature=0.4, prefer=config.TEACHER_ORDER,
                          should_stop=lambda: job.status == "cancelled", effort=config.PLAN_REASONING_EFFORT,
-                         effort_for=config.PLAN_EFFORT_BY_PROVIDER)
+                         effort_for=config.PLAN_EFFORT_BY_PROVIDER, silence_s=config.TEACHER_SILENCE_SECONDS)
         _check(job)
         job.provider, job.model = reply.provider, reply.model
         try:
             plan = lesson.normalize(lesson.parse(reply.text))
         except lesson.PlanError as e:
             print(f"[plan] {job.id}: unusable plan ({e})", flush=True)
-            messages[1]["content"] = prompts.lesson_retry_prompt(job.prompt, reply.text, str(e))
+            messages = base + [{"role": "assistant", "content": reply.text[:12000]},
+                               {"role": "user", "content": prompts.lesson_retry_prompt(job.prompt, reply.text, str(e))}]
             continue
-        return None if plan["kind"] != "lesson" else plan
-    return None
+        if plan["kind"] != "lesson":
+            return best   # asked to fix, it gave up: keep the first plan if there was one
+        problems = lesson.check(plan)
+        if best is None or len(problems) < len(best_problems):
+            best, best_problems = plan, problems
+        if not problems:
+            return plan
+        print(f"[plan] {job.id}: {len(problems)} problem(s): {problems}", flush=True)
+        if attempt == 0:
+            _set(job, message=f"The AI teacher is fixing {len(problems)} problem{'s' if len(problems) > 1 else ''} "
+                              "in its plan…")
+            messages = base + [{"role": "assistant", "content": reply.text[:12000]},
+                               {"role": "user", "content": prompts.lesson_fix_prompt(problems)}]
+    return best
 
 
 def _run_lesson(job: Job) -> bool:
@@ -178,12 +192,21 @@ def _run_lesson(job: Job) -> bool:
         print(f"[plan] {job.id}: no lesson plan for this request, writing code instead", flush=True)
         job.provider = job.model = ""
         return False
+    plan, dropped = lesson.prune(plan)   # what would still fail goes, captions included
+    if dropped:
+        print(f"[plan] {job.id}: dropped {dropped} beat(s) that could not be shown", flush=True)
+    if not plan["steps"]:
+        return False
+    if fixed := lesson.correct_claims(plan):
+        print(f"[plan] {job.id}: corrected {fixed} wrong number(s) in the captions", flush=True)
     code = lesson.to_code(plan)
     if problems := sandbox.validate(code):
         print(f"[plan] {job.id}: generated scene rejected: {problems}", flush=True)
         return False
     job.code, job.title = code, sandbox.extract_title(code, job.prompt)
     final = _final_render(job, code, lesson.estimate_seconds(plan), label="Animating the explanation")
+    if final.skipped:   # something the checker could not foresee: worth knowing about
+        print(f"[plan] {job.id}: renderer skipped {len(final.skipped)} beat(s): {final.skipped}", flush=True)
     if final.ok:
         job.layout_notes = []
         _save(job, final.video)
