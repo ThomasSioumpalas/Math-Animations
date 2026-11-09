@@ -60,11 +60,16 @@ server/
   llm.py            free-provider chain with automatic fallback: gpt-oss-120b (OVHcloud) → Gemini 3.8 /
                     3.7 / 3.6 / 3.5 / 3.5-lite Flash → NVIDIA → Qwen 3.5 (OVHcloud) → GLM (Z.ai).
                     Lesson plans and chat ask the "teacher" models first (Gemini 3.6 → 3.7 → 3.8 → 3.5 → 3.5-lite)
-  lesson.py         lesson plans: parse, clean, check (and repair) them, turn them into a scene file
+  lesson.py         lesson plans: parse, clean, check (and repair) them, describe them for the reviewer,
+                    cut them into parts that render in parallel, turn them into scene files
+  reference.py      the reference library: reviewed cards per topic, with textbook chapters to read
+  sources.py        gives the teacher the matching cards + a passage from the open textbook
+                    Dive into Deep Learning (CC BY-SA 4.0); the sources are listed under each video
   kit/studio_lesson.py  plays a lesson plan: each caption on screen while its visual plays
   kit/lesson_ml.py  ML visuals: classes and boundaries, k-NN, residuals, polynomial fits, PCA,
                     k-means, histograms, loss curves, gradient descent, contour maps, networks
-  kit/lesson_math.py    exact numbers for plans (computed matrices, {det(R)}-style caption templates)
+  kit/lesson_math.py    exact numbers for plans: computed matrices and decompositions (SVD, eigen),
+                    worked calculations, exact fractions, {det(R)}-style caption templates
   kit/studio_kit.py layout-safe helpers (matrices, captions, worked equations, plots)
   prompts.py        teacher prompt (lesson plans), code-writing / fix prompts, chat prompt
   sandbox.py        static code checks + sandboxed subprocess render
@@ -73,4 +78,7 @@ frontend/src/       React + TypeScript UI (sidebar, composer, job + video views)
 Dockerfile          one image: built frontend + API + Manim + LaTeX
 hf_space/           entry point + apt/pip deps for the free Gradio/ZeroGPU Space
 deploy/hf_deploy.py one-command Hugging Face Spaces deploy
+tests/              fast checks, no rendering or network:  uv run python tests/test_lessons.py
+tools/              render_plan.py (render the test plans), run_job.py (one prompt through the whole
+                    pipeline), contact_sheet.py (frames of a video as one image)
 ```

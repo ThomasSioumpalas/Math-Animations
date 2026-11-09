@@ -22,6 +22,7 @@ import threading
 import time
 import json
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 
 from . import config
@@ -191,6 +192,7 @@ def _child_env(work: Path) -> dict[str, str]:
         # glibc gives every thread its own 64 MB malloc arena of address space; under the RLIMIT_AS
         # cap (RENDER_MEMORY_MB) that makes thread creation fail with EAGAIN on many-core hosts.
         MALLOC_ARENA_MAX="2",
+        RENDER_FPS_CAP=str(config.RENDER_FPS_CAP),
         MPLCONFIGDIR=str(work / "tmp"),
         # kpathsea: stop LaTeX from \input-ing files outside the work dir
         openin_any="p", openout_any="p", TEXMFOUTPUT=str(work), shell_escape="f",
@@ -209,8 +211,34 @@ def _limits(timeout: int | None = None) -> None:  # runs in the child before exe
     resource.setrlimit(resource.RLIMIT_FSIZE, (300 * 1024 * 1024, 300 * 1024 * 1024))
 
 
+class ProcGroup:
+    """The render processes of one video that is rendered in parts."""
+
+    def __init__(self) -> None:
+        self.procs: list = []
+        self.dead = False
+        self._lock = threading.Lock()
+
+    def add(self, proc) -> None:
+        with self._lock:
+            self.procs.append(proc)
+            dead = self.dead
+        if dead:
+            kill(proc)
+
+    def kill(self) -> None:
+        with self._lock:
+            self.dead = True
+            procs = list(self.procs)
+        for proc in procs:
+            kill(proc)
+
+
 def kill(proc) -> None:
-    """Kill a render subprocess (and its children on Linux)."""
+    """Kill a render subprocess (and its children on Linux), or every process of a ProcGroup."""
+    if isinstance(proc, ProcGroup):
+        proc.kill()
+        return
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGKILL)
@@ -218,6 +246,67 @@ def kill(proc) -> None:
             proc.kill()
     except (ProcessLookupError, OSError):
         pass
+
+
+def concat(parts: list[Path], out: Path) -> None:
+    """Join video files that were encoded with the same settings (no re-encoding)."""
+    import av
+
+    manifest = "".join(f"file 'file:{Path(p).as_posix()}'\n" for p in parts).encode("utf-8")
+    with av.open(BytesIO(manifest), options={"safe": "0", "an": "1"}, format="concat") as src:
+        stream = src.streams.video[0]
+        with av.open(str(out), mode="w") as dst:
+            out_stream = dst.add_stream_from_template(template=stream)
+            for packet in src.demux(stream):
+                if packet.dts is None:   # flushing packet
+                    continue
+                packet.dts = None        # let libav recompute it across files
+                packet.stream = out_stream
+                dst.mux(packet)
+
+
+def render_parallel(codes: list[str], work: Path, quality: str = "low", on_start=None, timeout: int | None = None,
+                    on_progress=None) -> RenderResult:
+    """Render the parts of one video in separate processes at the same time, then join them. Never raises."""
+    t0 = time.time()
+    if work.exists():
+        shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True, exist_ok=True)
+    group = ProcGroup()
+    if on_start is not None:
+        on_start(group)
+    n = len(codes)
+    done, results, first_error = [0.0] * n, [None] * n, []
+    lock = threading.Lock()
+
+    def one(i: int) -> None:
+        def progress(t: float) -> None:
+            done[i] = t
+            if on_progress is not None:
+                on_progress(sum(done))
+
+        r = render(codes[i], work / f"part{i}", quality, on_start=group.add, timeout=timeout, on_progress=progress)
+        results[i] = r
+        if not r.ok:
+            with lock:
+                first = not first_error
+                first_error.append(f"part {i + 1}/{n}: {r.error}")
+            if first:
+                group.kill()   # the other parts are useless now
+
+    threads = [threading.Thread(target=one, args=(i,), daemon=True) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if first_error or any(r is None for r in results):
+        return RenderResult(False, None, first_error[0] if first_error else "a part did not render", time.time() - t0)
+    out = work / "video.mp4"
+    try:
+        concat([r.video for r in results], out)
+    except Exception as e:
+        return RenderResult(False, None, f"could not join the parts: {type(e).__name__}: {e}", time.time() - t0)
+    return RenderResult(True, out, "", time.time() - t0, [], "", skipped=[s for r in results for s in r.skipped][:20])
 
 
 def check(code: str, work: Path, on_start=None) -> RenderResult:

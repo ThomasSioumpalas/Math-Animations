@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg
 from manim import (
-    BLACK, DEGREES, DOWN, LEFT, RIGHT, UL, UP, UR, WHITE, YELLOW,
+    BLACK, DEGREES, DOWN, RIGHT, UL, UP, UR, WHITE, YELLOW,
     Animation, Arrow, BackgroundRectangle, Create, Dot, FadeIn, FadeOut, GrowArrow, Line,
     MarkupText, Mobject, Polygon, Scene, SingleStringMathTex, SurroundingRectangle, Text, ThreeDScene,
     VGroup, VMobject,
@@ -593,6 +593,17 @@ class Plane2D(_Stage):
         self.scene.play(FadeIn(sq), run_time=0.8)
         return sq
 
+    @_shown
+    def add_outline(self, points, color=YELLOW, fill: float = 0.0, closed: bool = True, width: float = 3.0):
+        """A shape given by points in ORIGINAL coordinates (e.g. the unit circle). It is drawn where those
+        points are now and moves with the plane: a circle becomes an ellipse."""
+        pts = [self.c2p(self.M @ np.asarray(q, float)[:2]) for q in points]
+        shape = VMobject(stroke_color=color, stroke_width=width, fill_color=color, fill_opacity=fill)
+        shape.set_points_as_corners(pts + ([pts[0]] if closed else []))
+        self._shapes.add(shape)
+        self.scene.play(Create(shape), run_time=1.0)
+        return shape
+
     def current_det(self) -> float:
         """Signed area of the (moving) unit square = determinant of everything applied so far."""
         if self.square is None:
@@ -743,7 +754,7 @@ class Plane2D(_Stage):
         return dots
 
     @_shown
-    def compose(self, steps, verify: bool = True):
+    def compose(self, steps, verify: bool = True, before=None):
         """Apply several transformations in order, e.g. compose([(R, "R"), (S, "S")]) applies R then S.
         Shows the formula S·R with the matrix being applied highlighted, then (verify=True) undoes
         everything and applies the product matrix in one move, landing in the same place."""
@@ -757,6 +768,8 @@ class Plane2D(_Stage):
         self.scene.play(FadeIn(box))
         start_M = self.M.copy()
         for k, (A, _) in enumerate(steps):
+            if before is not None:
+                before(k)          # e.g. show the caption of this move
             part = parts[len(parts) - 1 - k]
             hint = boxed("applying this one", font_size=22, color=YELLOW).next_to(box, DOWN, buff=0.08)
             hint.set_x(part.get_x())
@@ -767,6 +780,8 @@ class Plane2D(_Stage):
         for A, _ in steps:
             product = np.asarray(A, float) @ product
         if verify:
+            if before is not None:
+                before(len(steps))
             self.reset_space(target=start_M)
             self.show_matrix(product, name="".join(names), corner=UR)
             self.transform_space(product)

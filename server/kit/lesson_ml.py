@@ -14,10 +14,11 @@ import ast
 
 import numpy as np
 from manim import (
-    BLACK, DOWN, GREY_B, LEFT, RIGHT, UL, UR, WHITE, YELLOW, AnimationGroup, Circle, Create, DashedLine, Dot,
+    BLACK, DOWN, GREY_B, LEFT, RIGHT, UP, UR, WHITE, YELLOW, AnimationGroup, Circle, Create, DashedLine, Dot,
     Ellipse, FadeIn, FadeOut, GrowFromEdge, Indicate, Line, ManimColor, Polygon, Rectangle, ShowPassingFlash, Text,
     VGroup, VMobject, interpolate_color,
 )
+import lesson_math as LM
 from studio_kit import DataPlot, boxed, fit_to, fmt
 from studio_space import _segments
 
@@ -27,7 +28,7 @@ LOW, HIGH = ManimColor("#3B6FD8"), ManimColor("#FFD43B")
 
 def formula_xy(src: str):
     """A safe f(x, y) from text like 'x^2 + 3*y^2' (the tree is walked by hand, no eval)."""
-    from studio_lesson import _CONSTS, _FUNCS
+    _CONSTS, _FUNCS = LM.FORMULA_CONSTS, LM.FORMULA_FUNCS
     tree = ast.parse(str(src).replace("^", "**").replace("·", "*").replace("−", "-"), mode="eval")
     ops = {ast.Add: np.add, ast.Sub: np.subtract, ast.Mult: np.multiply, ast.Div: np.divide, ast.Pow: np.power}
 
@@ -247,21 +248,23 @@ class MLActions:
         self._need("plot")
         key, (dots, data) = self._series(b)
         x, y = data[:, 0], data[:, 1]
-        deg = int(np.clip(int(b.get("degree") or 2), 0, min(12, len(x) - 1)))
-        with np.errstate(all="ignore"):
-            poly = np.poly1d(np.polyfit(x, y, deg))
+        lam = max(0.0, float(b.get("ridge") or 0))
+        deg = int(np.clip(int(b.get("degree") or 2), 0, 12 if lam else min(12, len(x) - 1)))
+        poly, w = LM.ridge_polyfit(x, y, deg, lam)   # lam = 0: plain least squares
         sse = float(((poly(x) - y) ** 2).sum())
         (xlo, xhi), (ylo, yhi) = self._ranges()
         m = 0.02 * (yhi - ylo)
         color = self._color(b)
         a, c = float(x.min()), float(x.max())
-        graph = self.plot.axes.plot(lambda t: float(np.clip(poly(t), ylo - m, yhi + m)),
+        graph = self.plot.axes.plot(lambda t: float(np.clip(poly([t])[0], ylo - m, yhi + m)),
                                     x_range=[a, c, (c - a) / 300], color=color, stroke_width=4)
         old = [m_ for m_ in self.fits.pop(f"curve:{key}", []) if b.get("replace", True)]
         for o in old:
             self.plot.remove(o)
         anims = [Create(graph)] + [FadeOut(o) for o in old]
-        anims += self._status(f"degree {deg}: training error {fmt(sse)}", color)
+        size = f", size of weights Σw² = {fmt(float((w[1:] ** 2).sum()))}" if lam or b.get("ridge") is not None else ""
+        anims += self._status(f"degree {deg}{f', λ = {fmt(lam, 3)}' if b.get('ridge') is not None else ''}: "
+                              f"training error {fmt(sse)}{size}", color)
         self.s.play(*anims, run_time=1.5)
         self._adopt(graph, self.status)
         self.fits[f"curve:{key}"] = [graph]
@@ -397,8 +400,7 @@ class MLActions:
     def _do_descent(self, b):
         """Gradient descent on a 1-D curve: x ← x − lr·f'(x), step by step."""
         self._need("plot")
-        from studio_lesson import formula
-        f = formula(b["f"])
+        f = LM.formula(b["f"])
         if not self.graphs:   # the curve is drawn once; later descents walk on it
             self._do_curve({"f": b["f"], "label": b.get("label"), "color": b.get("curve_color")})
         (xlo, xhi), _ = self._ranges()
@@ -478,6 +480,54 @@ class MLActions:
                         *self._status(f"step {i}: f = {fmt(fv(q))}", color), run_time=0.35 if steps > 15 else 0.55)
             p = q
         self._adopt(dot, trail, self.status)
+
+    # ---------------------------------------------------------------- Bayes' rule as natural frequencies
+    def _do_bayes_tree(self, b):
+        """A population split by the prior, then by the test: counts instead of probabilities, the positives
+        highlighted, and the posterior as 'true positives / all positives'. show = prior | test | posterior
+        draws one level per beat (default: everything)."""
+        self._need("text")
+        prior, like, fp = float(b["prior"]), float(b["likelihood"]), float(b["false_positive"])
+        n = float(b.get("population") or 10000)
+        names = {"a": "sick", "not_a": "healthy", "b": "positive", "not_b": "negative", **(b.get("labels") or {})}
+        cnt = lambda v: f"{v:,.0f}" if abs(v - round(v)) < 1e-6 else f"{v:,.1f}"   # noqa: E731
+        a_n, na_n = n * prior, n * (1 - prior)
+        tp, fn, fpos, tn = a_n * like, a_n * (1 - like), na_n * fp, na_n * (1 - fp)
+        show = str(b.get("show") or "all").lower()
+        tree = getattr(self, "_bayes", None)
+        if tree is None or tree["root"] not in self.s.mobjects:
+            tree = self._bayes = {"level": 0}
+
+            def box(text, pos, color=WHITE):
+                t = Text(text, font_size=24, color=color, line_spacing=0.8)
+                t.add_background_rectangle(color=BLACK, opacity=0.9, buff=0.14)
+                frame = Rectangle(width=t.width + 0.1, height=t.height + 0.1, stroke_color=color, stroke_width=2)
+                return VGroup(t, frame).move_to(pos)
+
+            tree["root"] = box(f"{cnt(n)} people", [0, 2.35, 0])
+            tree["l1"] = [box(f"{cnt(a_n)} {names['a']}\n{LM.nice(prior * 100)}%", [-3.3, 0.95, 0], CLASS_COLORS[1]),
+                          box(f"{cnt(na_n)} {names['not_a']}\n{LM.nice((1 - prior) * 100)}%", [3.3, 0.95, 0], CLASS_COLORS[0])]
+            tree["l2"] = [box(f"{cnt(tp)}\n{names['b']}", [-4.9, -0.65, 0], YELLOW),
+                          box(f"{cnt(fn)}\n{names['not_b']}", [-1.7, -0.65, 0], GREY_B),
+                          box(f"{cnt(fpos)}\n{names['b']}", [1.7, -0.65, 0], YELLOW),
+                          box(f"{cnt(tn)}\n{names['not_b']}", [4.9, -0.65, 0], GREY_B)]
+            link = lambda u, v: Line(u.get_bottom(), v.get_top(), color=GREY_B, stroke_width=2)   # noqa: E731
+            tree["e1"] = [link(tree["root"], c) for c in tree["l1"]]
+            tree["e2"] = [link(tree["l1"][k // 2], c) for k, c in enumerate(tree["l2"])]
+            post = tp / (tp + fpos) if tp + fpos > 0 else 0.0
+            tree["result"] = Text(f"P({names['a']} | {names['b']}) = {cnt(tp)} / ({cnt(tp)} + {cnt(fpos)}) = {fmt(post * 100, 1)}%",
+                                  font_size=32, color=YELLOW).move_to([0, -2.2, 0])
+        want = {"prior": 1, "test": 2, "posterior": 3}.get(show, 3)
+        if tree["level"] < 1 <= want:
+            self.s.play(FadeIn(tree["root"]), run_time=0.6)
+            self.s.play(*(Create(e) for e in tree["e1"]), *(FadeIn(m) for m in tree["l1"]), run_time=1.0)
+        if tree["level"] < 2 <= want:
+            self.s.play(*(Create(e) for e in tree["e2"]), *(FadeIn(m) for m in tree["l2"]), run_time=1.2)
+        if tree["level"] < 3 <= want:
+            self.s.play(Indicate(tree["l2"][0], color=YELLOW, scale_factor=1.12),
+                        Indicate(tree["l2"][2], color=YELLOW, scale_factor=1.12), run_time=1.0)
+            self.s.play(FadeIn(tree["result"], shift=UP * 0.15), run_time=0.8)
+        tree["level"] = max(tree["level"], want)
 
     # ---------------------------------------------------------------- network view
     def _build_network(self, view: dict) -> None:

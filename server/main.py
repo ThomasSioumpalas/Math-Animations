@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs, llm, prompts
+from . import config, jobs, llm, prompts, sources
 from .kit import texclean
 from .storage import DEFAULT_FOLDER_ID, SID_RE, new_id, new_session_id, store
 
@@ -131,6 +131,7 @@ class RestoreVideo(BaseModel):
     attempts: int = 1
     model: str = Field(default="", max_length=200)
     layout_notes: list[str] = Field(default_factory=list, max_length=50)
+    sources: list[dict[str, str]] = Field(default_factory=list, max_length=12)
     code: str = Field(default="", max_length=400_000)
     chat: list[RestoreMessage] = Field(default_factory=list, max_length=60)
 
@@ -272,7 +273,9 @@ def ask_about_video(video_id: str, body: ChatIn, sid: str = Depends(session)):
     history = v.get("chat", [])[-CHAT_HISTORY_LIMIT:]
     question = body.message.strip()
     effort, deep = CHAT_THINKING.get(body.thinking, CHAT_THINKING["high"])
-    messages = [{"role": "system", "content": prompts.chat_system_prompt(v["title"], v["prompt"], code, deep)}]
+    refs = sources.lookup(question + " " + v["title"])   # the tutor answers from the same textbooks
+    messages = [{"role": "system", "content": prompts.chat_system_prompt(v["title"], v["prompt"], code, deep)
+                 + prompts.reference_block(refs.text)}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
     messages.append({"role": "user", "content": question})
     try:

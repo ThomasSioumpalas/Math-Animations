@@ -91,6 +91,9 @@ def main() -> int:
     def apply_config() -> None:
         config.media_dir = os.path.join(work, "media")
         config.quality = quality
+        fps_cap = float(os.environ.get("RENDER_FPS_CAP") or 0)
+        if fps_cap and config.frame_rate > fps_cap:   # fewer frames to draw; smooth enough for these animations
+            config.frame_rate = fps_cap
         config.disable_caching = True
         config.write_to_movie = mode != "check"
         config.save_last_frame = False

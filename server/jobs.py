@@ -4,13 +4,15 @@ Jobs live in memory only (lost on restart, which is fine for a session-scoped ap
 """
 from __future__ import annotations
 
+import copy
 import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 
-from . import config, lesson, llm, prompts, sandbox
+from . import config, lesson, llm, prompts, sandbox, sources
 from .storage import new_id, store
 
 
@@ -32,6 +34,7 @@ class Job:
     provider: str = ""
     model: str = ""
     layout_notes: list = field(default_factory=list)
+    sources: list = field(default_factory=list)      # references given to the teacher: [{"title", "where", "url"}]
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
 
@@ -45,10 +48,14 @@ class Job:
 _jobs: dict[str, Job] = {}
 _order: list[str] = []
 _lock = threading.Lock()
-_pool = ThreadPoolExecutor(max_workers=max(1, config.RENDER_WORKERS), thread_name_prefix="render")
+# Jobs wait for the AI at the same time; only the rendering itself queues for a slot, so one visitor's
+# planning never blocks another visitor's video.
+_pool = ThreadPoolExecutor(max_workers=max(1, config.JOB_WORKERS), thread_name_prefix="job")
+_render_slots = threading.BoundedSemaphore(max(1, config.RENDER_WORKERS))
 
 ACTIVE = {"queued", "writing", "rendering", "fixing"}
 _procs: dict[str, object] = {}   # job id -> running render subprocess (so cancel can kill it)
+_reviewers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="critic")
 
 
 class _Cancelled(Exception):
@@ -150,69 +157,172 @@ def _ask(job: Job, user_content: str, temperature: float) -> str:
     return sandbox.extract_code(reply.text)
 
 
-def _plan(job: Job) -> dict | None:
-    """The teacher model's lesson plan, or None when the request needs custom code."""
-    base = [{"role": "system", "content": prompts.LESSON_SYSTEM},
-            {"role": "user", "content": prompts.lesson_user_prompt(job.prompt)}]
-    messages, best, best_problems = base, None, None
-    for attempt in range(2):   # the plan + one round to fix what the checker found (time budget: ~2 min)
-        reply = llm.chat(messages, temperature=0.4, prefer=config.TEACHER_ORDER,
-                         should_stop=lambda: job.status == "cancelled", effort=config.PLAN_REASONING_EFFORT,
-                         effort_for=config.PLAN_EFFORT_BY_PROVIDER, silence_s=config.TEACHER_SILENCE_SECONDS)
+@contextmanager
+def _render_slot(job: Job):
+    """Hold one of the RENDER_WORKERS slots (rendering is CPU bound); a cancelled job stops waiting."""
+    told = False
+    while not _render_slots.acquire(timeout=0.5):
         _check(job)
-        job.provider, job.model = reply.provider, reply.model
+        if not told:
+            told = True
+            _set(job, message="Waiting for a free render slot…")
+    try:
+        yield
+    finally:
+        _render_slots.release()
+
+
+def _teacher(job: Job, messages: list[dict]) -> str:
+    reply = llm.chat(messages, temperature=0.4, prefer=config.TEACHER_ORDER,
+                     should_stop=lambda: job.status == "cancelled", effort=config.PLAN_REASONING_EFFORT,
+                     effort_for=config.PLAN_EFFORT_BY_PROVIDER, silence_s=config.TEACHER_SILENCE_SECONDS,
+                     race_after=config.TEACHER_RACE_SECONDS or None, json_mode=True)
+    _check(job)
+    job.provider, job.model = reply.provider, reply.model
+    return reply.text
+
+
+def _first_plan(job: Job, base: list[dict]) -> tuple[dict | None, str]:
+    """The teacher's plan (one retry if the reply is not usable JSON). None: the request needs custom code."""
+    messages = base
+    for _ in range(2):
+        text = _teacher(job, messages)
         try:
-            plan = lesson.normalize(lesson.parse(reply.text))
+            plan = lesson.normalize(lesson.parse(text))
         except lesson.PlanError as e:
             print(f"[plan] {job.id}: unusable plan ({e})", flush=True)
-            messages = base + [{"role": "assistant", "content": reply.text[:12000]},
-                               {"role": "user", "content": prompts.lesson_retry_prompt(job.prompt, reply.text, str(e))}]
+            messages = base + [{"role": "assistant", "content": text[:12000]},
+                               {"role": "user", "content": prompts.lesson_retry_prompt(job.prompt, text, str(e))}]
             continue
-        if plan["kind"] != "lesson":
-            return best   # asked to fix, it gave up: keep the first plan if there was one
-        problems = lesson.check(plan)
-        if best is None or len(problems) < len(best_problems):
-            best, best_problems = plan, problems
-        if not problems:
-            return plan
-        print(f"[plan] {job.id}: {len(problems)} problem(s): {problems}", flush=True)
-        if attempt == 0:
-            _set(job, message=f"The AI teacher is fixing {len(problems)} problem{'s' if len(problems) > 1 else ''} "
-                              "in its plan…")
-            messages = base + [{"role": "assistant", "content": reply.text[:12000]},
-                               {"role": "user", "content": prompts.lesson_fix_prompt(problems)}]
-    return best
+        return (plan if plan["kind"] == "lesson" else None), text
+    return None, ""
 
 
-def _run_lesson(job: Job) -> bool:
-    """Prompt -> lesson plan -> one render. False means: use the code-writing path instead."""
-    _set(job, status="writing", message="The AI teacher is planning the explanation…", attempt=1)
-    plan = _plan(job)
-    if plan is None:
-        print(f"[plan] {job.id}: no lesson plan for this request, writing code instead", flush=True)
-        job.provider = job.model = ""
-        return False
+def _critique(job: Job, plan: dict) -> list[str]:
+    """A second model compares every caption with what the renderer will really draw. Never raises."""
+    try:
+        reply = llm.chat([{"role": "system", "content": prompts.CRITIC_SYSTEM},
+                          {"role": "user", "content": prompts.critic_user_prompt(job.prompt, lesson.describe(plan))}],
+                         temperature=0.1, prefer=config.CRITIC_ORDER, effort="low", json_mode=True,
+                         should_stop=lambda: job.status == "cancelled", silence_s=config.TEACHER_SILENCE_SECONDS)
+        found = lesson.parse(reply.text).get("problems") or []
+    except Exception as e:   # the review is a bonus: a busy model must not cost the user the video
+        print(f"[critic] {job.id}: skipped ({type(e).__name__}: {str(e)[:120]})", flush=True)
+        return []
+    out = []
+    for item in found[:5]:
+        if isinstance(item, dict) and str(item.get("problem") or "").strip():
+            fix = str(item.get("fix") or "").strip()
+            out.append(f"beat {item.get('where', '?')}: {str(item['problem']).strip()[:300]}"
+                       + (f" Fix: {fix[:300]}" if fix else ""))
+    if out:
+        print(f"[critic] {job.id}: {len(out)} problem(s) by {reply.provider}: {out}", flush=True)
+    return out
+
+
+def _corrected(job: Job, base: list[dict], text: str, plan: dict, problems: list[str], known: int) -> dict:
+    """One correction round. Keeps the first plan if the corrected one is unusable or clearly worse."""
+    n = len(problems)
+    _set(job, status="writing", message=f"The AI teacher is correcting {n} problem{'s' if n > 1 else ''} in its plan…")
+    try:
+        fixed = lesson.normalize(lesson.parse(_teacher(job, base + [
+            {"role": "assistant", "content": text[:12000]},
+            {"role": "user", "content": prompts.lesson_fix_prompt(problems)}])))
+    except (lesson.PlanError, llm.LLMError) as e:
+        print(f"[plan] {job.id}: correction failed ({e}); keeping the first plan", flush=True)
+        return plan
+    if fixed["kind"] != "lesson":
+        return plan
+    left = lesson.check(fixed)
+    if left:
+        print(f"[plan] {job.id}: {len(left)} problem(s) left after the correction: {left}", flush=True)
+    return fixed if len(left) <= known + n else plan
+
+
+def _render_plan(job: Job, plan: dict, abort=None):
+    """Plan -> scene file -> the one render. Returns the render result, or None if nothing is renderable."""
     plan, dropped = lesson.prune(plan)   # what would still fail goes, captions included
     if dropped:
         print(f"[plan] {job.id}: dropped {dropped} beat(s) that could not be shown", flush=True)
     if not plan["steps"]:
-        return False
+        return None
     if fixed := lesson.correct_claims(plan):
         print(f"[plan] {job.id}: corrected {fixed} wrong number(s) in the captions", flush=True)
     code = lesson.to_code(plan)
     if problems := sandbox.validate(code):
         print(f"[plan] {job.id}: generated scene rejected: {problems}", flush=True)
-        return False
+        return None
     job.code, job.title = code, sandbox.extract_title(code, job.prompt)
-    final = _final_render(job, code, lesson.estimate_seconds(plan), label="Animating the explanation")
+    starts = lesson.split_parts(plan, config.RENDER_PARALLEL)
+    parts = [lesson.to_code(plan, (k, starts)) for k in range(len(starts))] if len(starts) > 1 else None
+    final = _final_render(job, code, lesson.estimate_seconds(plan), label="Animating the explanation", abort=abort,
+                          parts=parts)
     if final.skipped:   # something the checker could not foresee: worth knowing about
         print(f"[plan] {job.id}: renderer skipped {len(final.skipped)} beat(s): {final.skipped}", flush=True)
-    if final.ok:
+    return final
+
+
+def _run_lesson(job: Job) -> bool:
+    """Prompt -> lesson plan -> one render. False means: use the code-writing path instead.
+
+    The plan is checked twice: by lesson.check (instant, exact) and by a reviewer model that compares the
+    captions with what will really be drawn. The reviewer runs WHILE the video already renders, so a good
+    plan loses no time; if it objects, the render is stopped and the teacher corrects the plan once."""
+    _set(job, status="writing", message="The AI teacher is planning the explanation…", attempt=1)
+    refs = sources.lookup(job.prompt)
+    job.sources = refs.cited
+    base = [{"role": "system", "content": prompts.LESSON_SYSTEM},
+            {"role": "user", "content": prompts.lesson_user_prompt(job.prompt, refs.text)}]
+    plan, text = _first_plan(job, base)
+    if plan is None:
+        print(f"[plan] {job.id}: no lesson plan for this request, writing code instead", flush=True)
+        job.provider = job.model = ""
+        return False
+
+    review = _reviewers.submit(_critique, job, copy.deepcopy(plan)) if config.PLAN_CRITIC else None
+    problems = lesson.check(plan)
+    final = None
+    if problems:   # a correction is needed anyway: wait for the reviewer so one round fixes everything
+        print(f"[plan] {job.id}: {len(problems)} problem(s): {problems}", flush=True)
+        found = review.result() if review else []
+        _check(job)
+        plan = _corrected(job, base, text, plan, problems + found, 0)
+    elif review:   # looks fine: start rendering now, and stop only if the reviewer objects
+        stop = threading.Event()
+        done = threading.Event()
+
+        def watch() -> None:
+            if review.result():
+                stop.set()
+                while not done.wait(0.3):   # the render process may not have started yet
+                    proc = _procs.get(job.id)
+                    if proc is not None:
+                        sandbox.kill(proc)
+
+        threading.Thread(target=watch, daemon=True).start()
+        try:
+            final = _render_plan(job, copy.deepcopy(plan), abort=stop.is_set)
+        finally:
+            done.set()
+        _check(job)
+        if not stop.is_set() and not review.done():   # the render won the race: give the review a moment
+            try:
+                review.result(timeout=config.CRITIC_GRACE_SECONDS)
+            except Exception:
+                pass
+        found = review.result() if review.done() else []
+        if found:
+            plan = _corrected(job, base, text, plan, found, 0)
+            final = None
+    if final is None:
+        final = _render_plan(job, plan)
+    if final is not None and final.ok:
         job.layout_notes = []
         _save(job, final.video)
         return True
-    print(f"[plan] {job.id}: lesson render failed, writing code instead: "
-          f"{final.error.strip().splitlines()[-1][:300] if final.error.strip() else '?'}", flush=True)
+    if final is not None:
+        print(f"[plan] {job.id}: lesson render failed, writing code instead: "
+              f"{final.error.strip().splitlines()[-1][:300] if final.error.strip() else '?'}", flush=True)
     job.provider = job.model = ""
     return False
 
@@ -242,7 +352,8 @@ def _run(job: Job) -> None:
                 _check(job)
                 _set(job, status="rendering",
                      message="Checking the animation…" if attempt == 1 else f"Checking the fixed version ({attempt}/{job.max_attempts})…")
-                result = sandbox.check(code, work, on_start=lambda p: _track(job, p))
+                with _render_slot(job):
+                    result = sandbox.check(code, work, on_start=lambda p: _track(job, p))
                 _procs.pop(job.id, None)
                 _check(job)
                 if result.ok and result.warnings and (not best_code or len(result.warnings) <= len(best_notes)):
@@ -294,8 +405,15 @@ def _run(job: Job) -> None:
         store.unpin(job.sid)
 
 
-def _final_render(job: Job, code: str, video_seconds: float = 0.0, label: str = ""):
-    """The one real render, at the quality the user picked (default 720p)."""
+def _final_render(job: Job, code: str, video_seconds: float = 0.0, label: str = "", abort=None, parts=None):
+    """The one real render, at the quality the user picked (default 720p). `parts`: the same video as
+    several scene files that are rendered at the same time and joined."""
+    _check(job)
+    with _render_slot(job):
+        return _render_now(job, code, video_seconds, label, abort, parts)
+
+
+def _render_now(job: Job, code: str, video_seconds: float, label: str, abort, parts):
     _check(job)
     res = {"low": "480p", "medium": "720p", "high": "1080p"}.get(job.quality, job.quality)
     base = f"{label} ({res})" if label else f"All checks passed. Rendering the {res} video"
@@ -306,11 +424,18 @@ def _final_render(job: Job, code: str, video_seconds: float = 0.0, label: str = 
             pct = int(min(99, 100 * done / video_seconds))
             _set(job, message=f"{base}… {pct}%")
 
-    result = sandbox.render(code, config.WORK_DIR / f"{job.id}_final", job.quality,
-                            on_start=lambda p: _track(job, p), timeout=config.FINAL_RENDER_TIMEOUT_SECONDS,
-                            on_progress=progress)
+    if parts:
+        result = sandbox.render_parallel(parts, config.WORK_DIR / f"{job.id}_final", job.quality,
+                                         on_start=lambda p: _track(job, p),
+                                         timeout=config.FINAL_RENDER_TIMEOUT_SECONDS, on_progress=progress)
+    else:
+        result = sandbox.render(code, config.WORK_DIR / f"{job.id}_final", job.quality,
+                                on_start=lambda p: _track(job, p), timeout=config.FINAL_RENDER_TIMEOUT_SECONDS,
+                                on_progress=progress)
     _procs.pop(job.id, None)
     _check(job)
+    if abort is not None and abort():
+        return result   # stopped on purpose (the plan is being corrected): no retry
     if not result.ok and "timed out" not in result.error:
         # The check run already proved the code works, so this is almost always the machine (encoder,
         # memory), not the code: render again with Manim's plain settings instead of asking the AI.
@@ -341,5 +466,6 @@ def _save(job: Job, video_path) -> None:
             "attempts": job.attempt,
             "model": f"{job.provider} · {job.model}" if job.provider else "",
             "layout_notes": job.layout_notes,
+            "sources": job.sources,
         })
     _set(job, status="done", message="Done!", video_id=vid, error="", finished_at=time.time())

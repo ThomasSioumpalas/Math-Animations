@@ -7,6 +7,7 @@ cooldown and the next provider is used, so the site keeps working when one free 
 from __future__ import annotations
 
 import json
+import queue
 import re
 import threading
 import time
@@ -104,7 +105,7 @@ def _fail_on_status(name: str, status: int, text: str, retry_after: str) -> None
 
 
 def _call(name: str, base: str, key: str, model: str, messages: list[dict], temperature: float,
-          should_stop=None, effort: str | None = None, silence_s: int | None = None) -> str:
+          should_stop=None, effort: str | None = None, silence_s: int | None = None, json_mode: bool = False) -> str:
     """Streamed request. Fails fast when the provider produces nothing within
     LLM_FIRST_TOKEN_SECONDS (overloaded free tiers often just hang), so the chain moves on."""
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
@@ -114,6 +115,8 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
             "max_tokens": config.LLM_MAX_TOKENS, "stream": True}
     if effort:
         body["reasoning_effort"] = effort
+    if json_mode and name in config.JSON_MODE_PROVIDERS:   # the reply is guaranteed to be syntactically valid JSON
+        body["response_format"] = {"type": "json_object"}
     silence_s = silence_s or config.LLM_FIRST_TOKEN_SECONDS
     timeout = httpx.Timeout(connect=20, read=silence_s, write=30, pool=20)
     deadline = time.time() + config.LLM_TIMEOUT_SECONDS
@@ -157,9 +160,68 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
     return content
 
 
+def _race(chain, messages, temperature, should_stop, effort, effort_for, silence_s, race_after: float,
+          json_mode: bool = False) -> Reply:
+    """Ask the first available model; if it has not finished after `race_after` seconds, ask the next one
+    too (at most two at a time) and take whichever answers first. A model that fails is replaced at once."""
+    results: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    pending = [p for p in chain if _available(p[0])]
+    errors: list[str] = []
+
+    def run(name, base, key, model):
+        t0 = time.time()
+        try:
+            text = _call(name, base, key, model, messages, temperature,
+                         lambda: stop.is_set() or (should_stop is not None and should_stop()),
+                         (effort_for or {}).get(name, effort), silence_s, json_mode)
+            results.put((name, model, text, None, time.time() - t0))
+        except Exception as e:
+            if isinstance(e, httpx.HTTPError):
+                _cool(name, 60)
+            results.put((name, model, None, e, time.time() - t0))
+
+    running = 0
+
+    def launch() -> bool:
+        nonlocal running
+        if not pending:
+            return False
+        threading.Thread(target=run, args=pending.pop(0), daemon=True).start()
+        running += 1
+        return True
+
+    launch()
+    next_at = time.time() + race_after
+    while running:
+        try:
+            name, model, text, err, dt = results.get(timeout=0.25)
+        except queue.Empty:
+            if should_stop is not None and should_stop():
+                stop.set()
+                raise LLMError("cancelled")
+            if running < 2 and time.time() >= next_at and launch():
+                print("[llm] still waiting: asking a second model as well", flush=True)
+                next_at = time.time() + race_after
+            continue
+        running -= 1
+        if err is None:
+            stop.set()   # the slower model's request is abandoned
+            print(f"[llm] {name} ({model}) answered in {dt:.0f}s", flush=True)
+            return Reply(text, name, model)
+        if str(err) != "cancelled":
+            errors.append(str(err) if isinstance(err, LLMError) else f"{name}: network error {type(err).__name__}")
+            print(f"[llm] {errors[-1]} (after {dt:.0f}s) -> trying next provider", flush=True)
+        if running == 0:
+            launch()
+            next_at = time.time() + race_after
+    print("[llm] all providers failed:", "; ".join(errors), flush=True)
+    raise LLMError("All free AI providers are busy right now. Please try again in a few minutes.")
+
+
 def chat(messages: list[dict], temperature: float = 0.3, prefer: str | list | tuple | None = None,
          should_stop=None, effort: str | None = None, effort_for: dict | None = None,
-         silence_s: int | None = None) -> Reply:
+         silence_s: int | None = None, race_after: float | None = None, json_mode: bool = False) -> Reply:
     """Send a chat request to the first available provider in the chain.
     `prefer` puts a provider (or an ordered list of providers) first, e.g. the teacher models for
     lesson plans and chat, or the model that wrote the code for a fix round.
@@ -170,6 +232,8 @@ def chat(messages: list[dict], temperature: float = 0.3, prefer: str | list | tu
     order = [prefer] if isinstance(prefer, str) else list(prefer or [])
     rank = {name: k for k, name in enumerate(order) if name}
     chain = sorted(config.ACTIVE_PROVIDERS, key=lambda p: rank.get(p[0], len(rank)))
+    if race_after:
+        return _race(chain, messages, temperature, should_stop, effort, effort_for, silence_s, race_after, json_mode)
     errors = []
     for _ in range(2):  # second pass: retry anything whose short cooldown has expired
         for name, base, key, model in chain:
@@ -180,7 +244,7 @@ def chat(messages: list[dict], temperature: float = 0.3, prefer: str | list | tu
             t0 = time.time()
             try:
                 text = _call(name, base, key, model, messages, temperature, should_stop,
-                             (effort_for or {}).get(name, effort), silence_s)
+                             (effort_for or {}).get(name, effort), silence_s, json_mode)
                 print(f"[llm] {name} ({model}) answered in {time.time() - t0:.0f}s", flush=True)
                 return Reply(text, name, model)
             except httpx.HTTPError as e:

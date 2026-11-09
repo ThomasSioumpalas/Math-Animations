@@ -15,7 +15,7 @@ export type Example = {
 export type ExampleGroup = { name: string; hint: string; items: Example[] }
 export type Collection = { id: string; name: string; groups: ExampleGroup[] }
 
-const BEGINNER_NOTE = 'Explain every step for a total beginner, with captions.'
+const BEGINNER_NOTE = 'Explain every step and why it works.'
 
 export const COLLECTIONS: Collection[] = [
   // ------------------------------------------------------------------ linear algebra
