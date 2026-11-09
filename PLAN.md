@@ -25,7 +25,7 @@
                                           └──────────────────────────────────────────┘
                                                        │ OpenAI-compatible HTTP
                                                        ▼
-                                          Gemini → NVIDIA → Z.ai → OVHcloud (free tiers)
+                     gpt-oss (OVH) → Gemini Flash ×5 → NVIDIA → Qwen (OVH) → GLM (Z.ai), free tiers
 ```
 
 **Lesson plans first (since 2026-11-09).** Writing a whole Manim file took the AI 2–3 minutes and
@@ -105,7 +105,7 @@ Limits of this approach, which are fine for an MVP:
 |---|---|---|
 | Lovable for the site | React + Vite in this repo, served by FastAPI in Docker | Lovable makes frontends with Supabase backends. It **cannot run Python/Manim**, which needs ffmpeg, cairo, pango and LaTeX on a real machine. A Lovable frontend would still need this same backend somewhere, so one container is simpler. |
 | Login page for persistence | Anonymous cookie + disk + 1 h TTL | It meets the goal with no DB, passwords or GDPR work. Real accounts can come later (§6). |
-| Kimi directly | **Chain of free providers**: gpt-oss-120b (OVHcloud, no key) → Gemini 3.8 Flash → Gemini 3.6 Flash → Nemotron 3 Ultra (NVIDIA) → Qwen 3.5 397B (OVHcloud) → GLM-4.7-Flash (Z.ai) | Kimi has no free API anymore. gpt-oss-120b scored 9/10 in `evals/model_eval.py` and is the fastest, with no daily quota (keyless OVH use is limited to 2 requests/min per IP). No free provider is unlimited, so `server/llm.py` falls through the chain automatically when one is rate-limited (429), fails, or stays silent for 75 s. |
+| Kimi directly | **Chain of free providers**: gpt-oss-120b (OVHcloud, no key) → Gemini 3.8 / 3.7 / 3.6 / 3.5 / 3.5-lite Flash → Nemotron 3 Ultra (NVIDIA) → Qwen 3.5 397B (OVHcloud) → GLM-4.7-Flash (Z.ai). Lesson plans and the chat ask the faster "teacher" models first (Gemini 3.6 → 3.7 → 3.8 → 3.5 → 3.5-lite; `TEACHER_MODELS`), skipping one that stays silent for 35 s | Kimi has no free API anymore. gpt-oss-120b scored 9/10 in `evals/model_eval.py` and is the fastest, with no daily quota (keyless OVH use is limited to 2 requests/min per IP). No free provider is unlimited, so `server/llm.py` falls through the chain automatically when one is rate-limited (429), fails, or stays silent for 75 s. |
 | Render (like ReportLens) | **Hugging Face Space (Gradio SDK on ZeroGPU)**; `Dockerfile` + `render.yaml` kept as alternatives | HF made Docker Spaces PRO-only in 2026, but free accounts can still run 2 Gradio Spaces on ZeroGPU (2 vCPU / 16 GB). `hf_space/app.py` runs our FastAPI app inside one, with a dummy `@spaces.GPU` function so it boots. Render free (0.1 CPU / 512 MB, sleeps after 15 min) is too weak for Manim. |
 | "Use all the libraries" | Allow-list: manim, numpy, scipy, networkx, math, random… | The AI's code runs **on your server**, so it can't be allowed to `import os` or open sockets. See §5. |
 

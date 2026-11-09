@@ -1,14 +1,17 @@
-# Math Animations + Manim Studio
+# Math Animations
 
-Two things live in this repo:
+**Manim Studio** is a free website that turns a question about math or machine learning into a short
+animated explanation video, made in about 1–2 minutes by free AI models.
 
-1. **`scenes/`**: a few hand-written example Manim scenes. They are independent of the website,
-   which never reads them.
-2. **Manim Studio** (`server/` + `frontend/`): a website where you describe an animation in plain
-   English, an LLM translates it into Manim code (a chain of free providers: Gemini 3.8 Flash first, then
-   Gemma 4 on NVIDIA, GLM on Z.ai, Qwen on OVHcloud), and the server renders
-   the video. Videos go into folders in a side panel and are kept for 1 hour after you leave,
-   with no account or database. See **[PLAN.md](PLAN.md)** for the design and roadmap.
+- **Any question → video**: linear algebra on moving grids, data tables and heatmaps, plots, distributions,
+  classifiers, PCA, clustering, gradient descent on loss surfaces, neural networks. Your own numbers are
+  used, and every number on screen is computed exactly.
+- **Chat under every video**: ask follow-up questions about it (Standard / High / Max thinking), and turn
+  any answer into a new video with **Animate this**.
+- **Free example library**: ready-made prompts covering linear algebra, probability, statistics and ML.
+- **No account**: folders for your videos, download the MP4 and its code; videos stay while the page is
+  open and for 1 hour after you close it.
+
 
 ## Setup (Windows / PowerShell, with uv)
 
@@ -17,22 +20,6 @@ uv python install 3.12
 uv sync
 uv run manim checkhealth
 ```
-
-## Run the hand-written scenes
-
-```powershell
-uv run manim -pql -a scenes\column_space.py   # all scenes in a file (-pql = preview, low quality)
-uv run manim -pqh scenes\inverse.py UndoA     # one scene in HD
-```
-
-| File | Topic |
-|---|---|
-| `scenes/column_space.py` | Column space, span, linear dependence |
-| `scenes/inverse.py` | How the inverse A⁻¹ works, determinant |
-| `scenes/norms.py` | Norms and the dot product |
-| `scenes/eigen.py` | Eigendecomposition |
-| `scenes/special_matrices.py` | Special matrices and vectors |
-| `scenes/ml_students.py` | Predicting grades with X w = y |
 
 ## Run Manim Studio locally
 
@@ -57,26 +44,6 @@ docker build -t manim-studio .
 docker run -p 7860:7860 --env-file .env manim-studio   # → http://localhost:7860
 ```
 
-## Deploy (public URL)
-
-**Live:** <https://tacious-manim-studio.hf.space>, a free Hugging Face Space.
-
-Free HF accounts can't run Docker Spaces anymore (PRO only, since 2026), but they can run up to
-2 **Gradio Spaces on ZeroGPU** hardware. `hf_space/app.py` uses that: it declares an unused
-`@spaces.GPU` function so ZeroGPU boots, mounts a stub Gradio page at `/gradio`, and serves our
-FastAPI app + React build on port 7860. Renders run on the Space's CPUs. System packages
-(cairo, pango, ffmpeg, LaTeX) come from `hf_space/packages.txt`.
-
-Redeploy after changes:
-
-```powershell
-cd frontend; npm run build; cd ..
-$env:HF_TOKEN = "hf_..."   # AI keys are read from your .env
-uv run --with huggingface_hub python deploy/hf_deploy.py Tacious/manim-studio
-```
-
-Other hosts: the `Dockerfile` runs anywhere that runs Docker (`--docker` flag for HF PRO, `render.yaml` for
-Render's free plan, which works but is slow and wipes videos when it sleeps after 15 minutes).
 
 ## Project layout
 
@@ -84,10 +51,17 @@ Render's free plan, which works but is slow and wipes videos when it sleeps afte
 server/
   main.py           FastAPI routes + serves frontend/dist
   storage.py        cookie sessions, per-session folders on disk, 1 h TTL cleanup
-  jobs.py           queue: LLM → safety check → render → auto-fix → save
-  llm.py            free-provider chain with automatic fallback (Gemini → NVIDIA → Z.ai → OVHcloud)
-  kit/studio_kit.py layout-safe helpers the AI uses (matrices, captions, worked equations, plots)
-  prompts.py        system / fix prompts for the model
+  jobs.py           queue: lesson plan → check → render (fallback: write code → check → fix → render) → save
+  llm.py            free-provider chain with automatic fallback: gpt-oss-120b (OVHcloud) → Gemini 3.8 /
+                    3.7 / 3.6 / 3.5 / 3.5-lite Flash → NVIDIA → Qwen 3.5 (OVHcloud) → GLM (Z.ai).
+                    Lesson plans and chat ask the "teacher" models first (Gemini 3.6 → 3.7 → 3.8 → 3.5 → 3.5-lite)
+  lesson.py         lesson plans: parse, clean, check (and repair) them, turn them into a scene file
+  kit/studio_lesson.py  plays a lesson plan: each caption on screen while its visual plays
+  kit/lesson_ml.py  ML visuals: classes and boundaries, k-NN, residuals, polynomial fits, PCA,
+                    k-means, histograms, loss curves, gradient descent, contour maps, networks
+  kit/lesson_math.py    exact numbers for plans (computed matrices, {det(R)}-style caption templates)
+  kit/studio_kit.py layout-safe helpers (matrices, captions, worked equations, plots)
+  prompts.py        teacher prompt (lesson plans), code-writing / fix prompts, chat prompt
   sandbox.py        static code checks + sandboxed subprocess render
   render_runner.py  runs inside the subprocess (audit hook, length cap)
 frontend/src/       React + TypeScript UI (sidebar, composer, job + video views)
