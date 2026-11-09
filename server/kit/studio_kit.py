@@ -44,7 +44,7 @@ if FONT:
 
 # Some models write LaTeX inside plain Text ("$A$", "\lambda", "\begin{bmatrix}..."), which Text shows
 # literally. Every Text is passed through _plain_math first, which turns that into Unicode math.
-from texclean import TEX_SYMBOLS as _TEX_SYMBOLS, plain_math as _plain_math, tex_to_unicode as _tex_to_unicode  # noqa: E402,F401
+from texclean import plain_math as _plain_math  # noqa: E402
 
 
 _text_init = Text.__init__

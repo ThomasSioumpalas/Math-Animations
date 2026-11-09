@@ -15,20 +15,19 @@ caption plus at most one visual action. This module decides HOW it looks, with t
 """
 from __future__ import annotations
 
-import ast
 import sys
 
 import numpy as np
 from manim import (
     BLACK, BLUE, DEGREES, DOWN, GOLD, GREEN, GREY_B, LEFT, ORANGE, PURPLE, RED, RIGHT, TEAL, UP, UR, WHITE, YELLOW,
     AnimationGroup, Create, DashedLine, Dot, FadeIn, FadeOut, GrowFromEdge, Indicate, LaggedStart, Line, ManimColor,
-    Rectangle, Text, ThreeDScene, VGroup, interpolate_color,
+    Rectangle, Text, ThreeDScene, VGroup, VMobject, interpolate_color,
 )
 from studio_kit import (
     DataPlot, Narrator, NumberMatrix, _caption_chunks, _wrap, animate_transpose, boxed, clear_stage, fit_to,
     fmt, hud, set_title, show_dot_product, show_matrix_product, transform_column, work_text,
 )
-from studio_space import Plane2D, Space3D
+from studio_space import Plane2D, Space3D, _dashed
 
 import lesson_math as LM
 from lesson_ml import MLActions
@@ -45,50 +44,17 @@ def _diverging(t: float):
     return interpolate_color(ManimColor(WHITE), POS_COLOR if t >= 0 else NEG_COLOR, abs(t))
 
 
-def play_lesson(scene, plan: dict) -> None:
-    _Lesson(scene, plan).run()
+def play_lesson(scene, plan: dict, part=None) -> None:
+    """part = (k, starts): play only the steps of part k (the video is rendered in parts and joined)."""
+    _Lesson(scene, plan, part).run()
 
 
 def _warn(msg: str) -> None:
     print(f"[lesson] {msg}", file=sys.stderr, flush=True)
 
 
-# ------------------------------------------------------------------ formulas --
-_FUNCS = {"exp": np.exp, "log": np.log, "ln": np.log, "log2": np.log2, "log10": np.log10, "sqrt": np.sqrt,
-          "sin": np.sin, "cos": np.cos, "tan": np.tan, "tanh": np.tanh, "arctan": np.arctan, "atan": np.arctan,
-          "abs": np.abs, "floor": np.floor, "max": np.maximum, "min": np.minimum, "maximum": np.maximum,
-          "minimum": np.minimum, "sign": np.sign}
-_CONSTS = {"pi": np.pi, "e": np.e}
-
-
-def formula(src: str):
-    """A safe f(x) from text like '1/(1+exp(-x))' or 'x^2 - 3' (no eval: the tree is walked by hand)."""
-    tree = ast.parse(str(src).replace("^", "**").replace("·", "*").replace("−", "-"), mode="eval")
-    ops = {ast.Add: np.add, ast.Sub: np.subtract, ast.Mult: np.multiply, ast.Div: np.divide,
-           ast.Pow: np.power, ast.Mod: np.mod}
-
-    def ev(n, x):
-        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
-            return float(n.value)
-        if isinstance(n, ast.Name):
-            if n.id == "x":
-                return x
-            if n.id in _CONSTS:
-                return _CONSTS[n.id]
-        if isinstance(n, ast.BinOp) and type(n.op) in ops:
-            return ops[type(n.op)](ev(n.left, x), ev(n.right, x))
-        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.USub, ast.UAdd)):
-            v = ev(n.operand, x)
-            return -v if isinstance(n.op, ast.USub) else v
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _FUNCS and not n.keywords:
-            return _FUNCS[n.func.id](*(ev(a, x) for a in n.args))
-        raise ValueError(f"unsupported formula part: {ast.dump(n)[:60]}")
-
-    def f(x):
-        with np.errstate(all="ignore"):
-            return np.asarray(ev(tree.body, np.asarray(x, float)), float) * np.ones_like(np.asarray(x, float))
-    f(np.array([0.5, 1.0]))  # fail now, not mid-animation
-    return f
+formula = LM.formula
+_FUNCS, _CONSTS = LM.FORMULA_FUNCS, LM.FORMULA_CONSTS
 
 
 # ------------------------------------------------------------------ text helpers --
@@ -121,8 +87,8 @@ def _nice_range(lo: float, hi: float, max_ticks: int = 8):
 
 # ------------------------------------------------------------------ the player --
 class _Lesson(MLActions):
-    def __init__(self, scene, plan: dict):
-        self.s, self.plan = scene, plan if isinstance(plan, dict) else {}
+    def __init__(self, scene, plan: dict, part=None):
+        self.s, self.plan, self.part = scene, plan if isinstance(plan, dict) else {}, part
         self.n = Narrator(scene)
         self.three_d = isinstance(scene, ThreeDScene)
         self.view = ""            # plane | space | matrices | plot | text
@@ -138,6 +104,7 @@ class _Lesson(MLActions):
         self.carry = {"square": False, "det": False}   # grid features a new grid shows again
         self.display: dict[str, object] = {}     # matrices view: id -> what is on screen for it (table = matrix + headers)
         self.board: list = []                    # text view: formula lines stacked in the middle of the screen
+        self.shape_labels: list = []             # labels of free shapes (they avoid each other)
         self._ml_reset()
         self.note = None
         self.temp: list = []                     # highlights that go at the next beat
@@ -147,21 +114,48 @@ class _Lesson(MLActions):
     # ---------------------------------------------------------------- flow
     def run(self) -> None:
         steps = [st for st in self.plan.get("steps") or [] if isinstance(st, dict)]
-        title = str(self.plan.get("title") or "").strip()
-        if title:
-            set_title(self.s, title)
-        question = LM.fill(str(self.plan.get("question") or "").strip(), self.named)
-        if question:
-            self._question_card(question)
-        for k, step in enumerate(steps):
-            self._start_step(step, steps[k:])
-            for beat in step.get("beats") or []:
+        lo, hi = 0, len(steps)
+        if self.part is not None:
+            k, starts = self.part
+            lo, hi = (list(starts) + [len(steps)])[k:k + 2]
+        if lo == 0:
+            title = str(self.plan.get("title") or "").strip()
+            if title:
+                set_title(self.s, title)
+            question = LM.fill(str(self.plan.get("question") or "").strip(), self.named)
+            if question:
+                self._question_card(question)
+        else:
+            self._prelude(steps[:lo])
+        for k in range(lo, hi):
+            self._start_step(steps[k], steps[k:hi])
+            for beat in steps[k].get("beats") or []:
                 if isinstance(beat, dict):
                     self._beat(beat)
         self._clear_temp()
+        if hi < len(steps):   # the next part starts on an empty screen: fade this one out
+            self._clear_note()
+            self.n.clear()
+            left = list(self.s.mobjects)
+            if left:
+                self.s.play(*(FadeOut(m) for m in left), run_time=0.6)
+            return
         answer = LM.fill(str(self.plan.get("answer") or "").strip(), self.named)
         if answer:
             self._answer_card(answer)
+
+    def _prelude(self, earlier: list) -> None:
+        """What earlier parts of the video left behind, without drawing them: the named values and
+        which grid features (unit square, area readout) come back on every new grid."""
+        for step in earlier:
+            for b in step.get("beats") or []:
+                if not isinstance(b, dict):
+                    continue
+                do = str(b.get("do") or "").strip().lower()
+                self._predefine(b, do)
+                if do in ("unit_square", "unit_cube", "determinant"):
+                    self.carry["square"] = True
+                    self.carry["det"] = self.carry["det"] or do == "determinant"
 
     def _question_card(self, question: str) -> None:
         """The question, big and centered, before the first picture (not a small caption on an empty screen)."""
@@ -294,6 +288,17 @@ class _Lesson(MLActions):
                             local[b["name"]] = v.ravel()
                 elif do == "points":
                     vecs += [np.asarray(p, float)[:dim] for p in (b.get("coords") or b.get("data") or [])][:40]
+                elif do == "decompose":
+                    for A, _ in LM.decomposition_steps(b.get("kind") or "svd", res(b.get("matrix"))):
+                        M = A @ M
+                        mats += [A, M.copy()]
+                elif do == "projection":
+                    vecs += [res(b.get("vector")).ravel(), res(b.get("onto")).ravel()]
+                elif do in LM.SHAPES and dim == 2:
+                    pts, _ = LM.shape_points(do, b, {**self.named, **local})
+                    lo, hi = pts.min(axis=0), pts.max(axis=0)
+                    shape_pts = [np.array(q) for q in ((lo[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1]), (hi[0], lo[1]))]
+                    vecs += shape_pts + [m @ q for m in mats[-6:] for q in shape_pts]
             except Exception:
                 pass
         return mats, vecs
@@ -334,6 +339,21 @@ class _Lesson(MLActions):
             elif do in ("show_matrix", "vector") and isinstance(name, str):
                 v = b.get("matrix") if do == "show_matrix" else b.get("coords")
                 self.named[name] = self._arr(v)
+            elif do == "decompose":
+                self._define_parts(b)
+            elif do == "projection":
+                self.named[str(name or "p")] = LM.project(self._arr(b.get("vector")), self._arr(b.get("onto")))
+            elif do == "transpose" and isinstance(name, str):
+                self.named[f"{name}ᵀ"] = np.atleast_2d(self._arr(name)).T
+            elif do == "set_values" and isinstance(name, str):
+                self.named[name] = np.atleast_2d(self._arr(b.get("values")))
+            elif do == "column_op" and isinstance(name, str):
+                M, j = np.atleast_2d(self._arr(name)).astype(float).copy(), int(b.get("col") or 0)
+                col, op = M[:, j], str(b.get("op") or "").lower()
+                M[:, j] = (col - col.mean() if op in ("center", "subtract_mean")
+                           else (col - col.mean()) / (col.std() or 1) if op in ("standardize", "zscore")
+                           else col * float(b.get("factor") or 1))
+                self.named[name] = M
             elif do == "multiply" and isinstance(b.get("name"), str):
                 self.named[name] = np.atleast_2d(self._arr(b.get("a"))) @ np.atleast_2d(self._arr(b.get("b")))
         except Exception:
@@ -424,101 +444,7 @@ class _Lesson(MLActions):
         self._show_note(self._calc_text(b), COLORS["yellow"] if b.get("highlight") else WHITE)
 
     def _calc_text(self, b) -> str:
-        what = str(b.get("what") or "").lower()
-        name = str(b.get("name") or "")
-
-        def mat(key="matrix"):
-            v = b.get(key) if b.get(key) is not None else b.get("of")
-            return np.atleast_2d(self._arr(v))
-
-        def label(key, fallback):
-            v = b.get(key)
-            return v if isinstance(v, str) and len(v) <= 4 else fallback
-
-        if what in ("det", "determinant"):
-            A, n = mat(), label("matrix", name or "A")
-            d = float(np.linalg.det(A))
-            if A.shape == (2, 2):
-                a, bb, c, dd = A.ravel()
-                return f"det({n}) = a·d − b·c = {_p(a)}·{_p(dd)} − {_p(bb)}·{_p(c)} = {fmt(d)}"
-            return f"det({n}) = {fmt(d)}"
-        if what in ("matvec", "apply"):
-            A, v = mat(), self._arr(b.get("vector")).ravel()
-            n, vn = label("matrix", "A"), label("vector", "v")
-            r = A @ v
-            if A.shape[1] <= 3:
-                parts = " + ".join(f"{_p(x)}·{_vec(A[:, j])}" for j, x in enumerate(v))
-                return f"{n}·{vn} = {parts} = {_vec(r)}"
-            return f"{n}·{vn} = {_vec(r)}"
-        if what in ("matmul", "product"):
-            A, B = np.atleast_2d(self._arr(b.get("a"))), np.atleast_2d(self._arr(b.get("b")))
-            return f"{label('a', 'A')}·{label('b', 'B')} = {_matrix_text(A @ B)}"
-        if what == "dot":
-            u, v = self._arr(b.get("a")).ravel(), self._arr(b.get("b")).ravel()
-            terms = " + ".join(f"{_p(x)}·{_p(y)}" for x, y in zip(u, v))
-            return f"{label('a', 'u')}·{label('b', 'v')} = {terms} = {fmt(float(u @ v))}"
-        if what in ("norm", "length"):
-            v = self._arr(b.get("vector")).ravel()
-            inside = " + ".join(f"{_p(x)}²" for x in v)
-            return f"‖{label('vector', 'v')}‖ = √({inside}) = {fmt(float(np.linalg.norm(v)))}"
-        if what == "inverse":
-            A, n = mat(), label("matrix", "A")
-            d = float(np.linalg.det(A))
-            if abs(d) < 1e-12:
-                return f"det({n}) = 0, so {n} has no inverse"
-            inv = np.linalg.inv(A)
-            if A.shape == (2, 2):
-                a, bb, c, dd = A.ravel()
-                return (f"{n}⁻¹ = 1/{fmt(d)} · [[{fmt(dd)}, {fmt(-bb)}], [{fmt(-c)}, {fmt(a)}]] = {_matrix_text(inv)}")
-            return f"{n}⁻¹ = {_matrix_text(inv)}"
-        if what in ("eigen", "eigenvalues"):
-            A, n = mat(), label("matrix", "A")
-            if b.get("vector") is not None:
-                v = self._arr(b.get("vector")).ravel()
-                Av = A @ v
-                k = int(np.argmax(np.abs(v)))
-                lam = Av[k] / v[k] if abs(v[k]) > 1e-12 else 0.0
-                ok = np.allclose(Av, lam * v, atol=1e-6)
-                return (f"{n}·{_vec(v)} = {_vec(Av)} = {fmt(lam)}·{_vec(v)}" if ok
-                        else f"{n}·{_vec(v)} = {_vec(Av)}: not a multiple of {_vec(v)}")
-            vals = np.linalg.eigvals(A)
-            if np.all(np.abs(vals.imag) < 1e-9):
-                vals = sorted(vals.real, reverse=True)
-                return ", ".join(f"λ{chr(0x2081 + i)} = {fmt(x)}" for i, x in enumerate(vals))
-            return f"{n} has no real eigenvalues (it rotates every direction)"
-        if what in ("mean", "average", "variance", "var", "std", "sd"):
-            x = self._arr(b.get("values")).ravel()
-            m = float(x.mean())
-            mean_txt = f"mean = ({' + '.join(fmt(v) for v in x)}) / {len(x)} = {fmt(m)}"
-            if what in ("mean", "average"):
-                return mean_txt
-            ddof = 1 if b.get("sample") else 0
-            var = float(((x - m) ** 2).sum() / (len(x) - ddof))
-            dev = " + ".join(f"({fmt(v)} − {fmt(m)})²" for v in x[:6]) + (" + …" if len(x) > 6 else "")
-            var_txt = f"variance = ({dev}) / {len(x) - ddof} = {fmt(var)}"
-            if what in ("variance", "var"):
-                return var_txt
-            return f"std = √{fmt(var)} = {fmt(np.sqrt(var))}"
-        if what in ("covariance", "cov", "correlation", "corr"):
-            a, c = self._arr(b.get("a")).ravel(), self._arr(b.get("b")).ravel()
-            an, cn = label("a", "X"), label("b", "Y")
-            ma, mc = a.mean(), c.mean()
-            terms = " + ".join(f"({fmt(x - ma)})·({fmt(y - mc)})" for x, y in zip(a[:4], c[:4]))
-            terms += " + …" if len(a) > 4 else ""
-            cov = float(((a - ma) * (c - mc)).mean())
-            if what in ("covariance", "cov"):
-                return f"cov({an}, {cn}) = ({terms}) / {len(a)} = {fmt(cov)}"
-            sa, sc = float(a.std()), float(c.std())
-            r = cov / (sa * sc) if sa * sc > 0 else 0.0
-            return f"r({an}, {cn}) = cov({an}, {cn}) / (σ{an}·σ{cn}) = {fmt(cov)} / ({fmt(sa)}·{fmt(sc)}) = {fmt(r)}"
-        if what in ("expectation", "expected"):
-            x, p = self._arr(b.get("values")).ravel(), self._arr(b.get("probs")).ravel()
-            terms = " + ".join(f"{fmt(v)}·{fmt(q)}" for v, q in zip(x, p))
-            return f"E[X] = {terms} = {fmt(float(x @ p))}"
-        if what in ("sum", "total"):
-            x = self._arr(b.get("values")).ravel()
-            return f"{' + '.join(fmt(v) for v in x)} = {fmt(float(x.sum()))}"
-        raise ValueError(f"unknown calc '{what}'")
+        return LM.calc_text(b, self.named)
 
     # ---------------------------------------------------------------- grid views (plane / space)
     def _do_show_matrix(self, b):
@@ -548,6 +474,118 @@ class _Lesson(MLActions):
         if arrow is None:
             raise KeyError("no vector on the grid yet")
         self.stage.show_combination(arrow)
+
+    # ---------------------------------------------------------------- decompositions and projections
+    _PART_ALIASES = {"Vᵀ": "Vt", "Σ": "S", "Λ": "L", "Qᵀ": "Qt", "Q⁻¹": "Qinv"}
+
+    def _define_parts(self, b):
+        steps = LM.decomposition_steps(b.get("kind") or "svd", np.atleast_2d(self._arr(b.get("matrix"))))
+        for m, n in steps:   # U, Σ, Vᵀ (also S, Vt) or Q, Λ, Qᵀ (also L, Qt) can be quoted in captions
+            self.named[n] = m
+            self.named[self._PART_ALIASES.get(n, n)] = m
+        return steps
+
+    def _do_decompose(self, b):
+        """The matrix as three simple moves applied one after another (SVD: rotate, stretch, rotate;
+        eigendecomposition: change basis, stretch, change back), then the whole matrix in one move:
+        both land in the same place. Every factor is computed here."""
+        self._need("plane")
+        steps = self._define_parts(b)
+        if not np.allclose(self.stage.M, np.eye(2)) and abs(np.linalg.det(self.stage.M)) > 1e-9:
+            self.stage.reset_space()
+        singular = any(abs(np.linalg.det(m)) < 1e-9 for m, _ in steps)
+        says = [LM.fill(str(t), self.named) for t in (b.get("says") or []) if str(t).strip()]
+
+        def narrate(k: int) -> None:   # one caption per move, shown just before the move it describes
+            if k < len(says):
+                self._caption(says[k])
+                self.s.wait(min(2.5, max(1.0, 0.22 * len(says[k].split()))))
+
+        self.stage.compose(steps, verify=bool(b.get("verify", True)) and not singular,
+                           before=narrate if says else None)
+
+    def _do_projection(self, b):
+        """Project one vector onto the line through another: the foot of the perpendicular."""
+        self._need("plane")
+        bv, a = self._arr(b.get("vector")).ravel()[:2], self._arr(b.get("onto")).ravel()[:2]
+        pr = LM.project(bv, a)
+        names = [v if isinstance(v, str) and len(v) <= 3 else d for v, d in ((b.get("onto"), "a"), (b.get("vector"), "b"))]
+        for name, v, color in ((names[0], a, TEAL), (names[1], bv, YELLOW)):
+            if name not in self.vecs:
+                self.vecs[name] = self.stage.add_vector(v, label=name, color=color)
+                self.named[name] = v
+        st = self.stage
+        u, reach = a / np.linalg.norm(a), st._screen_reach()
+        line = _dashed(st.c2p(-reach * u), st.c2p(reach * u), 0.12, stroke_color=TEAL, stroke_width=2, stroke_opacity=0.6)
+        st._add_static(line)
+        self.s.play(Create(line), run_time=0.8)
+        drop = DashedLine(st.c2p(bv), st.c2p(pr), dash_length=0.08, color=GREY_B)
+        st._shapes.add(drop)
+        self.s.play(Create(drop), run_time=0.8)
+        pname = str(b.get("name") or "p")
+        self.vecs[pname] = st.add_vector(pr, label=pname, color="#FF86C8")
+        self.named[pname] = pr
+
+    # ---------------------------------------------------------------- free shapes (plane, plot, contour)
+    def _do_shape(self, b):
+        do = str(b.get("do")).lower()
+        if self.view not in ("plane", "plot", "contour"):
+            raise ValueError(f"'{do}' needs a plane, plot or contour view")
+        pts, closed = LM.shape_points(do, b, self.named)
+        color = self._color(b)
+        label = str(b.get("label") or b.get("text") or "").strip()
+        on_grid = self.view == "plane"
+        pos = (lambda q: self.stage.c2p(self.stage.M @ np.asarray(q, float))) if on_grid else (lambda q: self._xy(q[0], q[1]))
+        mob = None
+        if do == "label":
+            if not label:
+                raise ValueError("label needs text")
+        elif do == "arrow":
+            mob = Line(pos(pts[0]), pos(pts[1]), color=color, stroke_width=5).add_tip(tip_length=0.2)
+        else:
+            fill = 0.22 if b.get("fill") else 0.0
+            if on_grid:
+                mob = self.stage.add_outline(pts, color=color, fill=fill, closed=closed)
+            else:
+                mob = VMobject(stroke_color=color, stroke_width=3.5, fill_color=color, fill_opacity=fill)
+                screen = [pos(q) for q in pts]
+                mob.set_points_as_corners(screen + ([screen[0]] if closed else []))
+        anims = []
+        if mob is not None and not (on_grid and do != "arrow"):
+            anims.append(Create(mob))
+        lab = None
+        if label:
+            lab = boxed(LM.fill(label, self.named), color=color, font_size=24, opacity=0.7)
+            screen_pts = [pos(q) for q in pts]
+            # around the shape: top, right, bottom, left, then the diagonals; the first spot free of other labels
+            spots = [(max(screen_pts, key=lambda q: q[1]), UP), (max(screen_pts, key=lambda q: q[0]), RIGHT),
+                     (min(screen_pts, key=lambda q: q[1]), DOWN), (min(screen_pts, key=lambda q: q[0]), LEFT),
+                     (max(screen_pts, key=lambda q: q[0] + q[1]), UP + RIGHT),
+                     (max(screen_pts, key=lambda q: q[1] - q[0]), UP + LEFT)]
+            taken = [m for m in self.shape_labels if m in self.s.get_mobject_family_members()]
+            for anchor, side in spots:
+                lab.next_to(anchor, side, buff=0.12) if do != "label" else lab.move_to(anchor)
+                lab.shift(LEFT * max(0.0, lab.get_right()[0] - 6.8) + RIGHT * max(0.0, -6.8 - lab.get_left()[0]))
+                if do == "label" or not any(abs(lab.get_x() - m.get_x()) < (lab.width + m.width) / 2
+                                            and abs(lab.get_y() - m.get_y()) < (lab.height + m.height) / 2 for m in taken):
+                    break
+            self.shape_labels.append(lab)
+            anims.append(FadeIn(lab))
+        if anims:
+            self.s.play(*anims, run_time=1.0)
+        if on_grid:
+            if do == "arrow":
+                self.s.remove(mob)
+                self.stage._shapes.add(mob)
+            if lab is not None:
+                self.stage._note(lab)
+        else:
+            self._adopt(*(a.mobject for a in anims))
+
+    _do_circle = _do_ellipse = _do_polygon = _do_norm_ball = _do_arrow = _do_line = _do_label = _do_shape
+
+    def _do_unit_circle(self, b):
+        self._do_shape({**b, "do": "circle", "center": [0, 0], "radius": 1})
 
     def _do_unit_square(self, b):
         self._need("plane", "space")
@@ -824,6 +862,10 @@ class _Lesson(MLActions):
                     ex, ey = self._ml_extent(b, do)
                     xs += list(ex)
                     ys += list(ey)
+                elif do in LM.SHAPES:
+                    pts, _ = LM.shape_points(do, b, self.named)
+                    xs += list(pts[:, 0])
+                    ys += list(pts[:, 1])
                 elif do == "bars":
                     bars = max(bars, len(b.get("values") or []))
                     ys += [float(v) for v in b.get("values") or []]
@@ -869,7 +911,11 @@ class _Lesson(MLActions):
                 lo, hi = min(lo, 0.0), max(hi, 0.0)
             pad = (0.35 if bars else 0.12) * (hi - lo or 1)   # bars: room for value labels + markers
             ylo, yhi, ystep = _nice_range(lo - (pad if lo < 0 else 0), hi + pad, max_ticks=6)
-        self.plot = DataPlot(x_range=(xlo, xhi, xstep), y_range=(ylo, yhi, ystep), width=8.6, height=3.9,
+        width, height = 8.6, 3.9
+        if view.get("equal"):   # one unit looks the same in both directions (circles stay circles)
+            scale = min(width / (xhi - xlo), height / (yhi - ylo))
+            width, height = (xhi - xlo) * scale, (yhi - ylo) * scale
+        self.plot = DataPlot(x_range=(xlo, xhi, xstep), y_range=(ylo, yhi, ystep), width=width, height=height,
                              x_label=str(view.get("x_label") or "x"), y_label=str(view.get("y_label") or "y"),
                              x_numbers=not bars)
         fit_to(self.plot, "main")
@@ -955,7 +1001,7 @@ class _Lesson(MLActions):
             bar._kit_neg = v < 0
             group.add(bar)
             if b.get("show_values", True):
-                texts.add(Text(fmt(v, 3), font_size=20, color=color).next_to(bar, UP if v >= 0 else DOWN, buff=0.08))
+                texts.add(Text(LM.nice(v), font_size=20, color=color).next_to(bar, UP if v >= 0 else DOWN, buff=0.08))
             if k < len(labels):
                 texts.add(Text(labels[k], font_size=20, color=GREY_B).next_to(base, DOWN, buff=0.12))
         self.s.play(AnimationGroup(*(GrowFromEdge(r, UP if r._kit_neg else DOWN) for r in group), lag_ratio=0.12),

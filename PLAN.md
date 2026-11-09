@@ -54,6 +54,24 @@ The teacher prompt maps each kind of idea to the picture that shows it best and 
 idea in two pictures. Numbers in captions are `{templates}` the renderer fills in, such as `{det(R)}`
 and `{corr(X, Y)}`, so the model never states a computed value itself.
 
+**Where the mathematics comes from.** The teacher does not explain from memory alone:
+- `server/reference.py` holds reviewed cards per topic (definition, formulas, conditions, typical mistake,
+  use in ML), each citing the textbook chapters where the topic is treated.
+- `server/sources.py` adds the matching cards to the teacher's prompt, plus a passage from the open
+  textbook *Dive into Deep Learning* (CC BY-SA 4.0), fetched from its repository and cached.
+- The sources are stored with the video and listed under it. The chat tutor gets the same material.
+- Every number on screen is computed by `kit/lesson_math.py`, never by the model, including the factors
+  of an SVD or eigendecomposition.
+
+**Reviewer.** After the exact checks below, a second model reads each caption next to a generated,
+factual description of what its action will really draw (`lesson.describe`) and reports mismatches, wrong
+statements and invented results. It runs while the video already renders; if it objects, the render is
+stopped and the teacher corrects the plan once.
+
+**Speed.** The teacher's request races a second model after 12 s. A video is cut where a step starts a new
+view, the parts render in separate processes and are joined without re-encoding (`sandbox.render_parallel`).
+720p renders at 24 fps. Planning never holds the render slot, so visitors don't wait for each other's AI.
+
 **Plan checker.** `lesson.check` dry-runs every plan before rendering and catches:
 - unknown actions, or actions in the wrong view;
 - undefined names and wrong matrix sizes;

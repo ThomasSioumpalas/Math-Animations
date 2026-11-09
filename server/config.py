@@ -96,6 +96,18 @@ LESSON_PLANS = _bool("LESSON_PLANS", True)
 TEACHER_ORDER = [s.strip() for s in os.getenv(
     "TEACHER_MODELS", "Gemini 3.6-flash,Gemini 3.7-flash,Gemini 3.8-flash,Gemini 3.5-flash,Gemini 3.5-flash-lite").split(",")
     if s.strip()]
+# The reviewer ("critic") compares every caption of a plan with what will really be drawn. It runs while
+# the video renders; it asks other models first than the teacher, for a second opinion and to spread quota.
+PLAN_CRITIC = _bool("PLAN_CRITIC", True)
+CRITIC_ORDER = [s.strip() for s in os.getenv(
+    "CRITIC_MODELS", "Gemini 3.7-flash,Gemini 3.8-flash,Gemini 3.6-flash,Gemini 3.5-flash,Gemini 3.5-flash-lite").split(",")
+    if s.strip()]
+CRITIC_GRACE_SECONDS = _int("CRITIC_GRACE_SECONDS", 6)   # wait this long for a review after the render finished
+# Providers that accept response_format = json_object (tested: Gemini's OpenAI-compatible endpoint).
+JSON_MODE_PROVIDERS = {name for name, *_ in PROVIDERS if name.startswith("Gemini")}
+# Racing: if the teacher has not finished its plan after this many seconds, a second model is asked too and
+# the first complete answer wins (0 = off). Costs some extra free quota, saves the long waits.
+TEACHER_RACE_SECONDS = _int("TEACHER_RACE_SECONDS", 12)
 # A teacher that stays silent this long is skipped (overloaded free tiers often hang instead of failing).
 TEACHER_SILENCE_SECONDS = _int("TEACHER_SILENCE_SECONDS", 35)
 PLAN_REASONING_EFFORT = os.getenv("PLAN_REASONING_EFFORT", "medium")
@@ -107,7 +119,11 @@ MAX_FIX_ATTEMPTS = _int("MAX_FIX_ATTEMPTS", 3)            # versions the AI may 
 MAX_LAYOUT_FIX_ROUNDS = _int("MAX_LAYOUT_FIX_ROUNDS", 1)  # extra AI rounds spent on layout-only problems
 RENDER_TIMEOUT_SECONDS = _int("RENDER_TIMEOUT_SECONDS", 600)          # check runs (no frames drawn)
 FINAL_RENDER_TIMEOUT_SECONDS = _int("FINAL_RENDER_TIMEOUT_SECONDS", 2400)  # the one 720p/1080p render
-RENDER_WORKERS = _int("RENDER_WORKERS", 1)               # parallel renders (CPU bound)
+RENDER_WORKERS = _int("RENDER_WORKERS", 1)               # videos rendering at the same time (CPU bound)
+JOB_WORKERS = _int("JOB_WORKERS", 4)                     # jobs being planned / waiting for the AI at the same time
+# One video's steps are rendered by several processes at once and joined (lesson videos only).
+RENDER_PARALLEL = _int("RENDER_PARALLEL", min(4, os.cpu_count() or 2))
+RENDER_FPS_CAP = _int("RENDER_FPS_CAP", 24)              # 720p/1080p frame rate (Manim's default is 30/60)
 MAX_VIDEO_SECONDS = _int("MAX_VIDEO_SECONDS", 360)
 RENDER_MEMORY_MB = _int("RENDER_MEMORY_MB", 3072)        # Linux only (RLIMIT_AS)
 ALLOW_HD = _bool("ALLOW_HD", True)

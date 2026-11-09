@@ -10,6 +10,7 @@ export type Video = {
   attempts: number
   model?: string
   layout_notes?: string[]
+  sources?: { title: string; where: string; url: string }[]
 }
 
 export type Thinking = 'standard' | 'high' | 'max'

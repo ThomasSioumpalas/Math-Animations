@@ -85,6 +85,19 @@ export default function VideoView({ video, folders, onRename, onMove, onDelete, 
         </details>
       )}
 
+      {!!video.sources?.length && (
+        <details className="details notes">
+          <summary>Sources: {video.sources.length} textbook reference{video.sources.length > 1 ? 's' : ''} the AI teacher worked from</summary>
+          <ul>
+            {video.sources.map((s) => (
+              <li key={s.title + s.where}>
+                {s.title}, “{s.where}”{s.url && <> (<a href={s.url} target="_blank" rel="noreferrer">read online</a>)</>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       {showCode && <CodePanel code={code} downloadUrl={api.codeUrl(video.id)} />}
 
       <section className="prompt-box">

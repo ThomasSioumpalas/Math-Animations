@@ -15,7 +15,20 @@ import sys
 import tempfile
 from pathlib import Path
 
-from huggingface_hub import HfApi
+import socket
+
+# Some networks reset IPv6 connections to huggingface.co ("WinError 10054"). Prefer IPv4 when a host has
+# both; set HF_DEPLOY_IPV6=1 to keep the system default.
+if not os.environ.get("HF_DEPLOY_IPV6"):
+    _getaddrinfo = socket.getaddrinfo
+
+    def _prefer_ipv4(*args, **kwargs):
+        found = _getaddrinfo(*args, **kwargs)
+        return [r for r in found if r[0] == socket.AF_INET] or found
+
+    socket.getaddrinfo = _prefer_ipv4
+
+from huggingface_hub import HfApi  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 GRADIO_VERSION = "6.31.0"
