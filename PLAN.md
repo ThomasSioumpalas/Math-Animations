@@ -104,8 +104,11 @@ render near real time (a 145 s eigenvector video: 720p in ~165 s on a laptop, wa
   (it redraws everything listed after the first moving object);
 - kit labels find free spots with numpy bounding boxes instead of Manim's slow per-coordinate getters;
 - Text copies share their parsed glyph paths (FadeIn/FadeOut copy every caption: ~150 ms → ~25 ms);
-- Manim encodes finished animations in background threads (`max_inflight_encoders=4`) with x264
-  `veryfast` / `tune=animation`.
+- Manim encodes finished animations in background threads (`max_inflight_encoders=2`) with x264
+  `veryfast` / `tune=animation` and 2 threads per encoder. (x264's default of 1.5 threads per core,
+  times 4 encoders, broke renders on the many-core HF host under the 3 GB memory cap: "Failed to encode
+  video segment … [Errno 11]". If a final render still fails, it is retried once with Manim's defaults
+  instead of sending working code back to the AI.)
 
 ## 7. Roadmap: changes for later
 

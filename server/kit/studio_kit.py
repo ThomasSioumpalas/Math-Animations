@@ -14,6 +14,7 @@ never pile on top of each other:
 from __future__ import annotations
 
 import os
+import re
 import textwrap
 
 import manimpango
@@ -118,6 +119,33 @@ def _wrap(text: str, width: int) -> str:
     return "\n".join(textwrap.fill(p, width) for p in text.split("\n"))
 
 
+def _caption_chunks(text: str, width: int, max_lines: int = 2) -> list[str]:
+    """Split a caption into pieces of at most `max_lines` wrapped lines, at sentence ends
+    (then at commas/semicolons for one very long sentence)."""
+    def lines(s):
+        return len(_wrap(s, width).split("\n"))
+
+    if lines(text) <= max_lines:
+        return [text]
+    pieces = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if lines(sentence) > max_lines:   # one long sentence: break it at commas / semicolons
+            pieces += [p for p in re.split(r"(?<=[,;:])\s+", sentence) if p]
+        else:
+            pieces.append(sentence)
+    chunks, cur = [], ""
+    for p in pieces:
+        trial = f"{cur} {p}".strip()
+        if cur and lines(trial) > max_lines:
+            chunks.append(cur)
+            cur = p
+        else:
+            cur = trial
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
+
+
 def set_title(scene: Scene, text: str, font_size: int = 34, color=WHITE) -> Text:
     """Show (or replace) the title in the TITLE zone."""
     new = fit_to(boxed(text, color=color, font_size=font_size), "title")
@@ -137,6 +165,14 @@ class Narrator:
         self.current: Text | None = None
 
     def say(self, text: str, wait: float | None = None, color=WHITE) -> Text:
+        """Show a caption. Text longer than two lines is shown as several two-line captions, one
+        after another (squeezing it into the caption zone would make the letters too small)."""
+        chunks = _caption_chunks(text, self.cpl)
+        for chunk in chunks[:-1]:
+            self._say_one(chunk, None, color)
+        return self._say_one(chunks[-1], wait, color)
+
+    def _say_one(self, text: str, wait: float | None, color) -> Text:
         new = Text(_wrap(text, self.cpl), font_size=self.font_size, color=color, line_spacing=0.9)
         new.add_background_rectangle(color=BLACK, opacity=0.82, buff=0.14)
         fit_to(new, "caption")

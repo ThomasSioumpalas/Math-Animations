@@ -157,9 +157,10 @@ def _call(name: str, base: str, key: str, model: str, messages: list[dict], temp
 
 
 def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = None,
-         should_stop=None, effort: str | None = None) -> Reply:
+         should_stop=None, effort: str | None = None, effort_for: dict | None = None) -> Reply:
     """Send a chat request to the first available provider in the chain.
-    `prefer` puts a provider first (used so a fix round stays on the model that wrote the code)."""
+    `prefer` puts a provider first (used so a fix round stays on the model that wrote the code).
+    `effort_for` overrides the reasoning effort for some providers ({provider name: effort})."""
     if not config.ACTIVE_PROVIDERS:
         raise LLMError("No AI provider is configured on the server.")
     _count_call()
@@ -173,7 +174,8 @@ def chat(messages: list[dict], temperature: float = 0.3, prefer: str | None = No
                 continue
             t0 = time.time()
             try:
-                text = _call(name, base, key, model, messages, temperature, should_stop, effort)
+                text = _call(name, base, key, model, messages, temperature, should_stop,
+                             (effort_for or {}).get(name, effort))
                 print(f"[llm] {name} ({model}) answered in {time.time() - t0:.0f}s", flush=True)
                 return Reply(text, name, model)
             except httpx.HTTPError as e:

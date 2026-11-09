@@ -55,7 +55,9 @@ All methods ANIMATE BY THEMSELVES: call them directly, never inside self.play(..
   2-D (normal Scene):
   plane = Plane2D(self, matrices=[A, ...], vectors=[v, ...])   full-screen moving grid + faint fixed
       reference grid + î (green) and ĵ (red). Pass every matrix/vector you will show: it sizes the grid.
-  plane.show_matrix(A, name="A", corner=UL)    panel: column 1 green (= where î lands), column 2 red (= ĵ)
+  plane.show_matrix(A, name="A", corner=UL)    panel: column 1 green (= where î lands), column 2 red (= ĵ).
+                                               This IS the matrix on screen: never add a second
+                                               NumberMatrix of the same matrix over the grid
   v = plane.add_vector([3, -1], label="v")     yellow arrow; its label shows its CURRENT coordinates
   plane.show_combination(v)                    v = x·î + y·ĵ drawn tip to tail (green piece, red piece)
   plane.add_unit_square(); plane.show_determinant()   yellow unit square + LIVE "det = …" readout

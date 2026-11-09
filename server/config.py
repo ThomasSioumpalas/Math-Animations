@@ -81,6 +81,10 @@ LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 32768)   # includes thinking tokens; all
 # Reasoning ("thinking") effort sent to every provider (OpenAI-style `reasoning_effort`).
 # Gemini Flash accepts none/minimal/low/medium/high; "high" is its maximum.
 VIDEO_REASONING_EFFORT = os.getenv("VIDEO_REASONING_EFFORT", "high")   # writing + fixing videos
+# Per-model exceptions for writing videos. gpt-oss-120b on the free OVH endpoint thinks slowly
+# (~30 tokens/s): on "high" a video took 275 s and once more than 420 s (timed out), on "medium"
+# 152-168 s with code that passed every check first time (2026-11-09 measurements).
+VIDEO_EFFORT_BY_PROVIDER = {"gpt-oss-120b": os.getenv("OSS_VIDEO_EFFORT", "medium")}
 LLM_DAILY_CALL_LIMIT = _int("LLM_DAILY_CALL_LIMIT", 0)  # 0 = no site-wide cap
 
 # --- rendering -----------------------------------------------------------------

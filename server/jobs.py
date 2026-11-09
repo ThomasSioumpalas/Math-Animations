@@ -143,7 +143,8 @@ def _ask(job: Job, user_content: str, temperature: float) -> str:
         {"role": "system", "content": prompts.system_prompt()},
         {"role": "user", "content": user_content},
     ], temperature=temperature, prefer=job.provider or None,
-        should_stop=lambda: job.status == "cancelled", effort=config.VIDEO_REASONING_EFFORT)
+        should_stop=lambda: job.status == "cancelled", effort=config.VIDEO_REASONING_EFFORT,
+        effort_for=config.VIDEO_EFFORT_BY_PROVIDER)
     _check(job)
     job.provider, job.model = reply.provider, reply.model
     return sandbox.extract_code(reply.text)
@@ -240,6 +241,17 @@ def _final_render(job: Job, code: str, video_seconds: float = 0.0):
                             on_progress=progress)
     _procs.pop(job.id, None)
     _check(job)
+    if not result.ok and "timed out" not in result.error:
+        # The check run already proved the code works, so this is almost always the machine (encoder,
+        # memory), not the code: render again with Manim's plain settings instead of asking the AI.
+        print(f"[render] {job.id}: final render failed, retrying with safe settings: "
+              f"{result.error.strip().splitlines()[-1][:300] if result.error.strip() else '?'}", flush=True)
+        _set(job, message=base + "… (retrying)")
+        result = sandbox.render(code, config.WORK_DIR / f"{job.id}_final", job.quality,
+                                on_start=lambda p: _track(job, p), timeout=config.FINAL_RENDER_TIMEOUT_SECONDS,
+                                mode="render_safe", on_progress=progress)
+        _procs.pop(job.id, None)
+        _check(job)
     return result
 
 

@@ -187,6 +187,9 @@ def _child_env(work: Path) -> dict[str, str]:
         HOME=str(work), TMPDIR=str(work / "tmp"), TEMP=str(work / "tmp"), TMP=str(work / "tmp"),
         PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
         OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1",
+        # glibc gives every thread its own 64 MB malloc arena of address space; under the RLIMIT_AS
+        # cap (RENDER_MEMORY_MB) that makes thread creation fail with EAGAIN on many-core hosts.
+        MALLOC_ARENA_MAX="2",
         MPLCONFIGDIR=str(work / "tmp"),
         # kpathsea: stop LaTeX from \input-ing files outside the work dir
         openin_any="p", openout_any="p", TEXMFOUTPUT=str(work), shell_escape="f",

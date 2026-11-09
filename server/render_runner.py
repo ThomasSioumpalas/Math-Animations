@@ -101,13 +101,18 @@ def main() -> int:
         config.format = None
         # Speed (Manim >= 0.22): encode finished animations in background threads while the next
         # ones render (the default waits for each one), and use a fast x264 preset ("animation" tune
-        # suits flat colors and sharp lines; crf 21 keeps the picture crisp).
-        for key, value in (("max_inflight_encoders", 4),
-                           ("video_encoder_options", {"crf": "21", "preset": "veryfast", "tune": "animation"})):
-            try:
-                setattr(config, key, value)
-            except Exception:
-                pass
+        # suits flat colors and sharp lines; crf 21 keeps the picture crisp). Thread counts are fixed
+        # small: x264's default (1.5 threads per core) times several encoders exhausted the render's
+        # memory cap on a many-core server ("Failed to encode video segment ... [Errno 11]").
+        # mode "render_safe" (the automatic retry) keeps Manim's own defaults.
+        if mode == "render":
+            for key, value in (("max_inflight_encoders", 2),
+                               ("video_encoder_options", {"crf": "21", "preset": "veryfast", "tune": "animation",
+                                                          "threads": "2"})):
+                try:
+                    setattr(config, key, value)
+                except Exception:
+                    pass
 
     apply_config()
 
