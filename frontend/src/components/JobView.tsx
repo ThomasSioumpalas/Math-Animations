@@ -61,7 +61,7 @@ export default function JobView({ job, onRetry, onEdit, onCancel }: Props) {
         <div className={`stage-msg ${failed ? 'danger' : ''}`}>
           {active && <div className="progress"><div /></div>}
           <p>{job.message}{job.status === 'queued' && job.position > 1 ? ` (position ${job.position})` : ''}</p>
-          {active && <p className="muted small">Short animations take about a minute; step-by-step explanations take 3 to 10 minutes. You can start another animation or browse your library while you wait.</p>}
+          {active && <p className="muted small">Most explanations are ready in 1–2 minutes. You can start another animation or browse your library while you wait.</p>}
         </div>
         {active && (
           <div className="row gap">

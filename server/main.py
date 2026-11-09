@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config, jobs, llm, prompts
+from .kit import texclean
 from .storage import DEFAULT_FOLDER_ID, SID_RE, new_id, new_session_id, store
 
 
@@ -151,7 +152,9 @@ def health():
 @app.get("/api/config")
 def public_config():
     chain = config.ACTIVE_PROVIDERS
-    return {"model": chain[0][3] if chain else "none", "allow_hd": config.ALLOW_HD, "max_prompt_chars": config.MAX_PROMPT_CHARS,
+    names = {p[0]: p[3] for p in chain}
+    teacher = next((names[t] for t in config.TEACHER_ORDER if t in names), chain[0][3] if chain else "none")
+    return {"model": teacher, "allow_hd": config.ALLOW_HD, "max_prompt_chars": config.MAX_PROMPT_CHARS,
             "ttl_seconds": config.SESSION_TTL_SECONDS, "latex": config.LATEX_AVAILABLE}
 
 
@@ -283,7 +286,7 @@ def ask_about_video(video_id: str, body: ChatIn, sid: str = Depends(session)):
             raise HTTPException(404, "Video not found")
         target.setdefault("chat", []).extend([
             {"role": "user", "content": question, "at": now},
-            {"role": "assistant", "content": reply.text.strip(), "at": time.time(), "model": reply.model,
+            {"role": "assistant", "content": texclean.plain_chat(reply.text.strip()), "at": time.time(), "model": reply.model,
              "thinking": body.thinking if body.thinking in CHAT_THINKING else "high"},
         ])
         target["chat"] = target["chat"][-60:]

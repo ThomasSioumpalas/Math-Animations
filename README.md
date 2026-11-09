@@ -12,6 +12,11 @@ animated explanation video, made in about 1–2 minutes by free AI models.
 - **No account**: folders for your videos, download the MP4 and its code; videos stay while the page is
   open and for 1 hour after you close it.
 
+![A generated video: the matrix A moves the whole plane and the unit square becomes a parallelogram of area 5](docs/images/app-video.jpg)
+
+| Ask a question or pick an example | Ask follow-up questions under the video | Planned in seconds, then rendered |
+|:---:|:---:|:---:|
+| ![Home page with the prompt box and the example library](docs/images/app-home.jpg) | ![Chat under a video, with the Animate this button](docs/images/app-chat.jpg) | ![A video being made: queued, planning, rendering](docs/images/app-progress.jpg) |
 
 ## Setup (Windows / PowerShell, with uv)
 

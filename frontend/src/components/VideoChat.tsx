@@ -20,10 +20,11 @@ const SUGGESTIONS = [
 /** Minimal, safe formatting for answers: paragraphs, "- " bullet lists, **bold** and `code`. */
 function renderText(text: string): ReactNode {
   const inline = (line: string) =>
-    line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) =>
+    line.split(/(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`)/g).map((part, i) =>
       part.startsWith('**') && part.endsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong>
-        : part.startsWith('`') && part.endsWith('`') ? <code key={i}>{part.slice(1, -1)}</code>
-          : <Fragment key={i}>{part}</Fragment>)
+        : part.length > 2 && part.startsWith('*') && part.endsWith('*') ? <em key={i}>{part.slice(1, -1)}</em>
+          : part.startsWith('`') && part.endsWith('`') ? <code key={i}>{part.slice(1, -1)}</code>
+            : <Fragment key={i}>{part}</Fragment>)
   const blocks: ReactNode[] = []
   let list: string[] = []
   let code: string[] | null = null // inside a ``` fenced block (worked calculations)

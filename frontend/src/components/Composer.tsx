@@ -37,7 +37,7 @@ export default function Composer(p: Props) {
       <div className="hero">
         <div className="badge"><Sparkles size={14} /> Text to animation</div>
         <h1>What should we animate?</h1>
-        <p>Describe what you want to see, in as much detail as you like. The AI translates it into Manim code, renders the video, and fixes its own errors.</p>
+        <p>Ask a question or describe what you want to see. An AI teacher plans the explanation step by step, and every picture and number is drawn and computed exactly. Usually ready in 1–2 minutes.</p>
       </div>
 
       <form
@@ -74,7 +74,7 @@ export default function Composer(p: Props) {
           </button>
         </div>
       </form>
-      <div className="hint">Tip: be specific. Name the steps, the numbers and the colors. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to send.{p.config && <> Model: <code>{p.config.model}</code> + free fallbacks</>}</div>
+      <div className="hint">Tip: use your own numbers or data, and say what you want to understand. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to send.{p.config && <> Teacher: <code>{p.config.model}</code> + free fallbacks</>}</div>
 
       <ExampleLibrary
         onPick={(prompt) => {
