@@ -389,10 +389,13 @@ class Plane2D(_Stage):
         hidden = np.linalg.norm(p1 - p0) < 0.03          # squished onto the origin
         if hidden:
             p1 = p0 + RIGHT * 0.05
-        new = Arrow(p0, p1, buff=0, color=arrow._kit_color, stroke_width=arrow._kit_width,
+        # keep the color / opacity the scene gave the arrow (e.g. eigenvectors recolored pink)
+        color = arrow.get_color()
+        opacity = 1.0 if getattr(arrow, "_kit_squished", False) else arrow.get_stroke_opacity()
+        new = Arrow(p0, p1, buff=0, color=color, stroke_width=arrow._kit_width,
                     max_tip_length_to_length_ratio=0.3, max_stroke_width_to_length_ratio=8)
-        if hidden:
-            new.set_opacity(0)
+        new.set_opacity(0 if hidden else opacity)
+        arrow._kit_squished = hidden
         arrow.become(new)
 
     def _label_spot(self, arrow, label, mid: bool = False, strict: bool = False):
@@ -503,12 +506,15 @@ class Plane2D(_Stage):
         return p
 
     @_shown
-    def add_vector(self, coords, label: str | None = None, color=YELLOW, show_coords: bool = True):
+    def add_vector(self, coords, label: str | None = None, color=YELLOW, show_coords: bool | None = None):
         """A tracked vector from the origin with a label that follows its tip and shows its CURRENT
-        coordinates, e.g. 'v = [3, -1]' (updated after each transformation)."""
+        coordinates, e.g. 'v = [3, -1]' (updated after each transformation). An unnamed vector gets
+        no label unless show_coords=True (many labelled arrows would bury the picture)."""
         a = self._arrow([0, 0], coords, color, 5)
         anims = [GrowArrow(a)]
         label = str(label).strip() if label is not None else ""
+        if show_coords is None:
+            show_coords = bool(label)
         if "=" in label:          # the label already states the coordinates: do not repeat them
             show_coords = False
         if label or show_coords:
@@ -867,7 +873,7 @@ class Space3D(_Stage):
         if np.linalg.norm(p1 - p0) < 0.03:
             arrow.set_opacity(0)
             return
-        arrow.become(self._light_arrow(p0, p1, arrow._kit_color))
+        arrow.become(self._light_arrow(p0, p1, arrow[0].get_color()))   # keep a recolored arrow's color
 
     @_shown
     def show_matrix(self, A, name: str = "A", corner=UL):

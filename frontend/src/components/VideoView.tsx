@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Code2, Download, FolderInput, Pencil, Trash2, WandSparkles } from 'lucide-react'
 import { api, type Folder, type Video } from '../api'
+import { localCode, localUrl } from '../keeper'
 import CodePanel from './CodePanel'
 import VideoPlayer from './VideoPlayer'
 import VideoChat from './VideoChat'
@@ -23,8 +24,17 @@ export default function VideoView({ video, folders, onRename, onMove, onDelete, 
 
   useEffect(() => { setShowCode(false); setCode(''); setEditing(false); setTitle(video.title) }, [video.id, video.title])
   useEffect(() => {
-    if (showCode && !code) api.code(video.id).then(setCode).catch(() => setCode('# could not load code'))
+    if (showCode && !code) {
+      const kept = localCode(video.id)
+      if (kept) setCode(kept)
+      else api.code(video.id).then(setCode).catch(() => setCode('# could not load code'))
+    }
   }, [showCode, code, video.id])
+  // Play the page's own copy when it has one (it survives a server restart). Chosen once per
+  // video: swapping src mid-play would restart the video.
+  const src = useMemo(() => localUrl(video.id) ?? api.videoUrl(video.id), [video.id])
+  const local = localUrl(video.id)
+  const fileName = `${video.title.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'animation'}.mp4`
 
   const saveTitle = async () => {
     setEditing(false)
@@ -50,10 +60,10 @@ export default function VideoView({ video, folders, onRename, onMove, onDelete, 
         </div>
       </header>
 
-      <VideoPlayer key={video.id} src={api.videoUrl(video.id)} />
+      <VideoPlayer key={video.id} src={src} />
 
       <div className="toolbar">
-        <a className="primary" href={api.videoUrl(video.id, true)}><Download size={15} /> Download MP4</a>
+        <a className="primary" href={local ?? api.videoUrl(video.id, true)} download={local ? fileName : undefined}><Download size={15} /> Download MP4</a>
         <button className={`ghost ${showCode ? 'on' : ''}`} onClick={() => setShowCode((s) => !s)}><Code2 size={15} /> {showCode ? 'Hide code' : 'View code'}</button>
         <button className="ghost" onClick={onRemix} title="Start a new animation from this prompt"><WandSparkles size={15} /> Remix prompt</button>
         <label className="ghost select-wrap" title="Move to folder">

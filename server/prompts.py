@@ -59,6 +59,7 @@ All methods ANIMATE BY THEMSELVES: call them directly, never inside self.play(..
                                                This IS the matrix on screen: never add a second
                                                NumberMatrix of the same matrix over the grid
   v = plane.add_vector([3, -1], label="v")     yellow arrow; its label shows its CURRENT coordinates
+                                               (no label: a bare arrow, e.g. for many vectors at once)
   plane.show_combination(v)                    v = x·î + y·ĵ drawn tip to tail (green piece, red piece)
   plane.add_unit_square(); plane.show_determinant()   yellow unit square + LIVE "det = …" readout
   plane.transform_space(A, run_time=3)         the whole plane moves; î, ĵ land on A's columns; lines
@@ -110,7 +111,8 @@ it by hand, e.g. never add the eigenvectors yourself with add_vector after trans
   NOT on separate empty black screens, and never put plain Text in the middle of the grid. Only switch
   to a new Plane2D (clear_stage(self) first) when a new matrix needs a fresh grid. With many vectors, use
   add_vector(..., label=None, show_coords=False) or add_points(...) so labels do not crowd the picture.
-  The recap at the end is text only: clear_stage(self) first (the grid goes), then fit_to(recap, "main").
+  End on the picture: the last step keeps the final grid on screen and one caption states the
+  conclusion. Never end with a recap or a bullet-point list.
 
 SPACE VIEW EXAMPLE:
     def step_transform(self):
@@ -169,7 +171,8 @@ visualization they asked for. Any topic is fine: math, statistics, ML, physics, 
 STEP 1: DECIDE THE MODE
 - EXPLAIN mode (the default): the request is about a concept, method, formula, computation or
   "how / why" something works. Make an analytical, step-by-step explanation a total beginner can
-  follow and learn from.
+  follow and learn from, that analyses the idea in depth (why it works, what changes when the
+  numbers change) rather than only performing the computation.
 - ANIMATE mode: the request only describes motion or art ("a ball bounces", "a logo spins").
   Animate exactly that, with no captions and no extra content.
 
@@ -193,9 +196,22 @@ then write the code. In EXPLAIN mode the storyboard must contain:
      eigenvectors, ...): use the SPACE VIEW below as the main picture, in 2-D (Plane2D) or for 3x3
      matrices in 3-D (Space3D). Data (rows = samples, e.g. centering or scaling a dataset): plot the
      points with DataPlot and animate them moving as the transformation is applied.
-  4. "What you might have missed": 1–3 short steps with the key facts and intuitions the user did
-     not ask for but needs (what the result means, properties, common pitfalls, why it is used).
-  5. Recap: the whole pipeline in 2–4 short lines.
+  4. Deeper (REQUIRED: at least 2 steps; start their storyboard lines with "Deeper:"). Analyse the
+     idea further and add what the user did not ask for but needs to really understand it: WHY it
+     works, what the result means, its properties, special and edge cases, common mistakes, where
+     it is used. Each Deeper step is a full step of the video with its own visual and real numbers,
+     placed right after the step it deepens (never collected at the end). Ways to do it: change one
+     number and show what happens; compare a second case side by side; show the special case on
+     a fresh grid or plot. Examples:
+       determinant: a matrix with det = 0 (squished flat: information is lost, no inverse) and one
+         with det < 0 (orientation flips), each on its own Plane2D.
+       eigenvectors: a vector off the eigen-lines that gets turned; a matrix with a negative or
+         zero eigenvalue; why A·v = λ·v gives det(A − λI) = 0.
+       mean / variance / standardisation: one outlier added, and how much it moves the result.
+       matrix product: B·A versus A·B give different pictures (order matters).
+  5. Ending: finish on the final picture with ONE caption that answers the user's question in a
+     sentence. NO "what you might have missed", "key takeaways", recap or summary slide, and no
+     bullet-point list anywhere in the video.
 Captions: plain language for a beginner, explaining WHAT is happening and WHY, one idea at a time.
 Every number on screen should be explained by a caption the first time it appears.
 Structure the code as one method per storyboard step (self.step_setup(), self.step_center(), ...)
@@ -223,6 +239,8 @@ RULES:
 - Use the current Manim CE API: Create (not ShowCreation), obj.animate..., ax.plot (not get_graph),
   Transform/ReplacementTransform/TransformFromCopy, Indicate, Circumscribe, SurroundingRectangle.
 - {_LATEX if config.LATEX_AVAILABLE else _NO_LATEX}
+- Text, titles, captions and work lines are PLAIN text: never put $...$ or LaTeX commands (\\lambda,
+  \\frac, \\begin{{bmatrix}}) in them. Write λ, ·, ᵀ, ⁻¹, ², ≠, ⇒, √ and matrices as [[2, 1], [1, 2]].
 
 STYLE: if the user specifies a style, follow it. Otherwise use a dark background, one consistent
 color per concept (e.g. original data WHITE, results GREEN, highlights YELLOW), smooth transitions, and no clutter."""

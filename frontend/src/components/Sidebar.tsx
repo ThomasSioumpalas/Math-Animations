@@ -149,8 +149,8 @@ export default function Sidebar(p: Props) {
         <div className="sidebar-foot">
           <Clock size={14} />
           <div>
-            <strong>No account needed.</strong> Your videos are kept for {ttlLabel} after you leave, so
-            you can close the tab and come back. Download anything you want to keep.
+            <strong>No account needed.</strong> Your videos stay while this page is open, and for {ttlLabel} after
+            you close it, so you can come back. Download anything you want to keep.
           </div>
         </div>
       </aside>

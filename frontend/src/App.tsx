@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Menu, X } from 'lucide-react'
 import { ACTIVE, api, type Job, type PublicConfig, type SessionView } from './api'
+import * as keeper from './keeper'
 import Sidebar from './components/Sidebar'
 import Composer from './components/Composer'
 import JobView from './components/JobView'
@@ -30,7 +31,8 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
-  const prevJobs = useRef<Map<string, Job['status']>>(new Map())
+  const prevJobs = useRef<Map<string, Job>>(new Map())
+  const restoring = useRef(false)
   const selectionRef = useRef(selection)
   selectionRef.current = selection
 
@@ -42,12 +44,29 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const s = await api.session()
-      setData(s)
+      let s = await api.session()
       setOffline(false)
+      // The server lost our session (a restart wipes its disk): put back what this page holds.
+      if (keeper.isLost(s)) {
+        if (restoring.current) return
+        restoring.current = true
+        let n = 0
+        try { n = await keeper.restore() } catch { return } finally { restoring.current = false }
+        s = await api.session()
+        if (n) toast(`The server restarted, so this page put your ${n === 1 ? 'video' : `${n} videos`} back.`)
+      }
+      keeper.sync(s)
+      setData(s)
+      // Active jobs only vanish when the server restarts (cancelled ones are removed from prevJobs).
+      for (const [id, j] of prevJobs.current) {
+        if (ACTIVE.includes(j.status) && !s.jobs.some((x) => x.id === id)) {
+          toast(`The server restarted and stopped “${j.title || 'your animation'}”. Your prompt is back in the box: press Generate to try again.`, 'error')
+          setDraft((d) => (d.trim() ? d : j.prompt))
+        }
+      }
       // Notice jobs that just finished.
       for (const j of s.jobs) {
-        const before = prevJobs.current.get(j.id)
+        const before = prevJobs.current.get(j.id)?.status
         if (before && ACTIVE.includes(before) && j.status === 'done' && j.video_id) {
           const sel = selectionRef.current
           if (sel.kind === 'job' && sel.id === j.id) setSelection({ kind: 'video', id: j.video_id })
@@ -55,21 +74,30 @@ export default function App() {
         }
         if (before && ACTIVE.includes(before) && j.status === 'failed') toast(`An animation failed: ${j.message}`, 'error')
       }
-      prevJobs.current = new Map(s.jobs.map((j) => [j.id, j.status]))
+      prevJobs.current = new Map(s.jobs.map((j) => [j.id, j]))
     } catch {
       setOffline(true)
     }
-  }, [setSelection, toast])
+  }, [setSelection, setDraft, toast])
 
   useEffect(() => { void refresh(); api.config().then(setConfig).catch(() => {}) }, [refresh])
 
   const hasActive = !!data?.jobs.some((j) => ACTIVE.includes(j.status))
   useEffect(() => {
-    // Poll fast while rendering; otherwise a slow heartbeat keeps the session alive.
-    const t = setInterval(() => { if (hasActive || document.visibilityState === 'visible') void refresh() }, hasActive ? 2000 : 60000)
-    const onVis = () => { if (document.visibilityState === 'visible') void refresh() }
-    document.addEventListener('visibilitychange', onVis)
-    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVis) }
+    // Poll fast while rendering; otherwise a heartbeat every minute, in background tabs too:
+    // the server keeps a session until 1 h after the page was LAST SEEN, so an open page
+    // never expires. Catch up at once when the tab comes back or the network returns.
+    const t = setInterval(() => void refresh(), hasActive ? 2000 : 60000)
+    const wake = () => { if (document.visibilityState === 'visible') void refresh() }
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('online', wake)
+    window.addEventListener('pageshow', wake)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('online', wake)
+      window.removeEventListener('pageshow', wake)
+    }
   }, [hasActive, refresh])
 
   // If the selected thing disappeared (expired, deleted), go back to the composer.
@@ -89,7 +117,7 @@ export default function App() {
     setSubmitting(true)
     try {
       const job = await api.generate(prompt, folder, q)
-      prevJobs.current.set(job.id, job.status)
+      prevJobs.current.set(job.id, job)
       setSelection({ kind: 'job', id: job.id })
       setDraft('')
       await refresh()
@@ -148,6 +176,7 @@ export default function App() {
             onCancel={async () => {
               try {
                 await api.cancelJob(job.id)
+                prevJobs.current.delete(job.id)
                 setDraft(job.prompt)
                 setFolderId(job.folder_id)
                 setSelection({ kind: 'new' })

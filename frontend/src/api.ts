@@ -37,6 +37,7 @@ export type Job = {
 
 export type SessionView = {
   session_id: string
+  created_at: number
   folders: Folder[]
   videos: Video[]
   jobs: Job[]
@@ -111,4 +112,13 @@ export const api = {
   videoUrl: (id: string, download = false) =>
     `/api/videos/${id}/file?sid=${encodeURIComponent(sid)}${download ? '&download=1' : ''}`,
   codeUrl: (id: string) => `/api/videos/${id}/code?download=1&sid=${encodeURIComponent(sid)}`,
+  restore: (body: { folders: Folder[]; videos: (Video & { code: string; chat: ChatMessage[] })[] }) =>
+    req<{ need_files: string[] }>('POST', '/api/restore', body),
+  restoreFile: async (id: string, file: Blob) => {
+    const res = await fetch(`/api/restore/videos/${id}/file`, {
+      method: 'PUT', credentials: 'same-origin', body: file,
+      headers: { 'Content-Type': 'video/mp4', ...(sid ? { 'X-Session-Id': sid } : {}) },
+    })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  },
 }

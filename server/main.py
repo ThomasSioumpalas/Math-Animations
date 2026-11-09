@@ -5,6 +5,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -62,9 +63,13 @@ def _state_view(sid: str) -> dict:
     state = store.get(sid)
     return {
         "session_id": sid,
+        # Changes when the server lost this session (TTL or a restart wiping the disk): the
+        # open page then hands back the videos it still holds (POST /api/restore).
+        "created_at": state["created_at"],
         "folders": state["folders"],
         # chats are fetched per video (keeps the frequently polled session payload small)
-        "videos": sorted(({k: v for k, v in vid.items() if k != "chat"} for vid in state["videos"]),
+        "videos": sorted(({k: v for k, v in vid.items() if k != "chat"} for vid in state["videos"]
+                          if not vid.get("restoring")),
                          key=lambda v: v["created_at"], reverse=True),
         "jobs": [j.public() for j in jobs.for_session(sid)],
         "expires_at": store.expires_at(state),
@@ -96,6 +101,45 @@ class GenerateIn(BaseModel):
     prompt: str = Field(min_length=3)
     folder_id: str = DEFAULT_FOLDER_ID
     quality: str = "low"
+
+
+_ID = r"^[A-Za-z0-9_-]{1,64}$"
+
+
+class RestoreFolder(BaseModel):
+    id: str = Field(pattern=_ID)
+    name: str = Field(min_length=1, max_length=60)
+    created_at: float = 0
+
+
+class RestoreMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=40_000)
+    at: float = 0
+    model: str | None = Field(default=None, max_length=200)
+    thinking: str | None = Field(default=None, max_length=20)
+
+
+class RestoreVideo(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{6,64}$")
+    title: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(max_length=20_000)
+    folder_id: str = DEFAULT_FOLDER_ID
+    quality: str = Field(default="low", max_length=20)
+    created_at: float = 0
+    attempts: int = 1
+    model: str = Field(default="", max_length=200)
+    layout_notes: list[str] = Field(default_factory=list, max_length=50)
+    code: str = Field(default="", max_length=400_000)
+    chat: list[RestoreMessage] = Field(default_factory=list, max_length=60)
+
+
+class RestoreIn(BaseModel):
+    folders: list[RestoreFolder] = Field(default_factory=list, max_length=100)
+    videos: list[RestoreVideo] = Field(default_factory=list, max_length=100)
+
+
+RESTORE_MAX_BYTES = 150 * 1024 * 1024  # a 6-minute 720p video is ~40 MB
 
 
 # ---------------------------------------------------------------- routes ------
@@ -245,6 +289,68 @@ def ask_about_video(video_id: str, body: ChatIn, sid: str = Depends(session)):
         target["chat"] = target["chat"][-60:]
         messages_out = target["chat"]
     return {"messages": messages_out}
+
+
+@app.post("/api/restore")
+def restore(body: RestoreIn, sid: str = Depends(session)):
+    """Put back folders and videos that an open page still holds after the server lost them
+    (a restart wipes the disk; a phone can freeze a tab past the TTL). Only adds what is
+    missing and never overwrites. New videos stay hidden until their file arrives via
+    PUT /api/restore/videos/{id}/file; the reply lists the ones that need it."""
+    need: list[str] = []
+    with store.edit(sid) as state:
+        folder_ids = {f["id"] for f in state["folders"]}
+        for f in body.folders:
+            if f.id not in folder_ids and len(state["folders"]) < config.MAX_FOLDERS_PER_SESSION:
+                state["folders"].append(f.model_dump())
+                folder_ids.add(f.id)
+        videos = {v["id"]: v for v in state["videos"]}
+        for v in body.videos:
+            current = videos.get(v.id)
+            if current is None:
+                if len(state["videos"]) >= config.MAX_VIDEOS_PER_SESSION:
+                    continue
+                entry = v.model_dump(exclude={"code"}, exclude_none=True)
+                if entry["folder_id"] not in folder_ids:
+                    entry["folder_id"] = DEFAULT_FOLDER_ID
+                entry["restoring"] = True
+                state["videos"].append(entry)
+                store.video_path(sid, v.id, "py").write_text(v.code, "utf-8")
+                need.append(v.id)
+            elif current.get("restoring"):
+                need.append(v.id)
+    return {"need_files": need}
+
+
+@app.put("/api/restore/videos/{video_id}/file")
+async def restore_video_file(video_id: str, request: Request, sid: str = Depends(session)):
+    """The MP4 of a video announced by POST /api/restore (raw request body)."""
+    if not _video_meta(sid, video_id).get("restoring"):
+        raise HTTPException(409, "This video doesn't need restoring")
+    if int(request.headers.get("content-length") or 0) > RESTORE_MAX_BYTES:
+        raise HTTPException(413, "Video file too large")
+    path = store.video_path(sid, video_id, "mp4")
+    part = path.with_suffix(".part")
+    size, head = 0, b""
+    try:
+        with part.open("wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > RESTORE_MAX_BYTES:
+                    raise HTTPException(413, "Video file too large")
+                if len(head) < 12:
+                    head += chunk[:12 - len(head)]
+                f.write(chunk)
+        if head[4:8] != b"ftyp":  # every MP4 starts with an ftyp box
+            raise HTTPException(400, "Not an MP4 file")
+        part.replace(path)
+    finally:
+        part.unlink(missing_ok=True)
+    with store.edit(sid) as state:
+        v = next((x for x in state["videos"] if x["id"] == video_id), None)
+        if v is not None:
+            v.pop("restoring", None)
+    return {"ok": True}
 
 
 @app.post("/api/generate")

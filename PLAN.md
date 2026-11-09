@@ -40,12 +40,18 @@ You don't need a login or a database for this. **An anonymous session cookie is 
 1. The first visit gets a random 32-character id in an `HttpOnly` cookie (`mstudio_sid`).
 2. Everything that browser makes is stored on the server's disk in `data/sessions/<id>/`
    (`state.json` holds folders and video metadata; `videos/` holds the `.mp4` and `.py` files).
-3. Every request, plus a heartbeat every 60 s while the tab is open, updates `last_seen`.
+3. Every request, plus a heartbeat every 60 s while the page is open (background tabs too),
+   updates `last_seen`. So nothing expires while the page is open.
 4. A background thread deletes any session whose `last_seen` is older than
-   `SESSION_TTL_SECONDS` (default 3600).
+   `SESSION_TTL_SECONDS` (default 3600): one hour after the page was closed.
 5. Close the tab by mistake and come back within the hour: the cookie is still there,
    so the sidebar shows the same folders and videos. The draft prompt and the selected
    video are also restored from `localStorage`.
+6. The open page also keeps its own in-memory copy of every finished video (MP4, code, chat;
+   `frontend/src/keeper.ts`). A server restart wipes the disk, and a phone can freeze a
+   background tab for over an hour. When `/api/session` comes back with a new `created_at`, the
+   page puts everything back (`POST /api/restore`, then `PUT /api/restore/videos/{id}/file`).
+   The restore only adds what is missing, never overwrites, and accepts only MP4s up to 150 MB.
 
 Limits of this approach, which are fine for an MVP:
 - It is tied to **one browser**. A different device or an incognito window gets a new session.

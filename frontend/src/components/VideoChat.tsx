@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, LoaderCircle, MessageCircle, Sparkles, WandSparkles } from 'lucide-react'
 import { api, type ChatMessage, type Thinking } from '../api'
+import { keepChat } from '../keeper'
 
 const THINKING: { id: Thinking; label: string; hint: string }[] = [
   { id: 'standard', label: 'Standard', hint: 'Medium reasoning: fastest answers' },
@@ -65,7 +66,7 @@ export default function VideoChat({ videoId, videoTitle, onAnimate }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
-    api.videoChat(videoId).then((r) => setMessages(r.messages)).catch(() => setMessages([]))
+    api.videoChat(videoId).then((r) => { setMessages(r.messages); keepChat(videoId, r.messages) }).catch(() => setMessages([]))
   }, [videoId])
 
   useEffect(() => {
@@ -89,6 +90,7 @@ export default function VideoChat({ videoId, videoTitle, onAnimate }: Props) {
     try {
       const r = await api.askVideo(videoId, q, thinking)
       setMessages(r.messages)
+      keepChat(videoId, r.messages)
     } catch (e) {
       setError((e as Error).message)
       setMessages((m) => m.slice(0, -1))
