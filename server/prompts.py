@@ -109,7 +109,9 @@ it by hand, e.g. never add the eigenvectors yourself with add_vector after trans
   Keep the grid on screen for the WHOLE explanation: start each step with clear_stage(self, plane). Put
   calculations in plane.panel(work_text(...)) or a small NumberMatrix in plane.panel(...) over the grid,
   NOT on separate empty black screens, and never put plain Text in the middle of the grid. Only switch
-  to a new Plane2D (clear_stage(self) first) when a new matrix needs a fresh grid. With many vectors, use
+  to a new Plane2D when a new matrix needs a fresh grid, and then call clear_stage(self) FIRST with
+  NOTHING kept (the arguments of clear_stage are what STAYS: never keep the old plane or the old
+  matrix when you start a new grid, they would overlap the new ones). With many vectors, use
   add_vector(..., label=None, show_coords=False) or add_points(...) so labels do not crowd the picture.
   End on the picture: the last step keeps the final grid on screen and one caption states the
   conclusion. Never end with a recap or a bullet-point list.
@@ -204,7 +206,8 @@ then write the code. In EXPLAIN mode the storyboard must contain:
      number and show what happens; compare a second case side by side; show the special case on
      a fresh grid or plot. Examples:
        determinant: a matrix with det = 0 (squished flat: information is lost, no inverse) and one
-         with det < 0 (orientation flips), each on its own Plane2D.
+         with det < 0 (orientation flips), each on its own Plane2D (clear_stage(self) first) with
+         plane.show_matrix(B) and plane.show_determinant().
        eigenvectors: a vector off the eigen-lines that gets turned; a matrix with a negative or
          zero eigenvalue; why A·v = λ·v gives det(A − λI) = 0.
        mean / variance / standardisation: one outlier added, and how much it moves the result.

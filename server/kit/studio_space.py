@@ -188,6 +188,31 @@ class _Stage:
         self.basis = []
         self.matrix_panel = None
         self.grid = VGroup()
+        self._retire_others()
+
+    def _retire_others(self):
+        """One grid at a time: a new (or re-shown) stage fades out every other stage still on screen,
+        with its arrows, labels and panels. Models often keep the old plane with clear_stage(self, old)
+        and then build a new one, which would draw two grids on top of each other."""
+        stages = getattr(self.scene, "_kit_stages", None)
+        if stages is None:
+            stages = self.scene._kit_stages = []
+        owned: set[int] = set()
+        for st in stages:
+            if st is self:
+                continue
+            mobs = [st.background, st.layer, st.matrix_panel] + list(st._labels) + list(st._panels)
+            mobs += list(getattr(st, "axis_labels", []))
+            ro = getattr(st, "det_readout", None)
+            mobs.append(ro[0] if isinstance(ro, tuple) else ro)
+            for m in mobs:
+                if isinstance(m, Mobject):
+                    owned.update(id(x) for x in m.get_family())
+        if self not in stages:
+            stages.append(self)
+        gone = [m for m in self.scene.mobjects if id(m) in owned]
+        if gone:
+            self.scene.play(*(FadeOut(m) for m in gone), run_time=0.6)
 
     def _embed(self, M):
         M3 = np.eye(3)
@@ -302,6 +327,7 @@ class _Stage:
         (to keep it in the first place: clear_stage(self, plane))."""
         if self.grid in self.scene.get_mobject_family_members():
             return
+        self._retire_others()
         labels = [m for m in self._labels if m not in self._notes] + list(getattr(self, "axis_labels", []))
         self._add_to_back_of_scene()
         self.scene.play(FadeIn(self.background), FadeIn(self.layer), *(FadeIn(m) for m in labels), run_time=0.8)
