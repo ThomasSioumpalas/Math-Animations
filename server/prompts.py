@@ -72,7 +72,12 @@ All methods ANIMATE BY THEMSELVES: call them directly, never inside self.play(..
                                                make a new Plane2D after clear_stage instead)
   plane.add_points(rows, color)                many vectors as points that move with the plane
   plane.panel(mob, corner=UR)                  any worked numbers (e.g. a work line or NumberMatrix) on a
-                                               dark panel in a top corner; plane.coords_of(v) -> current coords
+                                               dark panel in a top corner (panels in one corner stack
+                                               downwards); remove it with self.play(FadeOut(mob)).
+                                               plane.coords_of(v) -> current coords
+  clear_stage(self, plane)                     between steps: keeps the grid, its vectors, their labels and
+                                               the matrix panel; clears panels, notes and other objects.
+                                               clear_stage(self) (no plane) removes the grid too.
   3-D (class GeneratedScene(ThreeDScene)):
   space = Space3D(self, matrices=[A3])         lattice of lines, î green, ĵ red, k̂ blue, axes x y z
   space.show_matrix(A3, name="A"); space.add_unit_cube(); space.show_determinant()
@@ -82,21 +87,49 @@ All methods ANIMATE BY THEMSELVES: call them directly, never inside self.play(..
   other Text you show, call hud(self, mob) first, then FadeIn it.
   Visual rules of the space view: keep the grid as the main picture (no big matrices in the middle of it);
   show one transformation at a time and pause after it; say in captions what to look at ("watch where
-  the green arrow lands"); tie every number to the geometry with color (î green, ĵ red, k̂ blue).
+  the green arrow lands"); tie every number to the geometry with color (î green, ĵ red, k̂ blue). Green and
+  red mean î and ĵ: give other vectors YELLOW (default), "#FF86C8" (pink), WHITE or the eigen colors the kit
+  picks, never GREEN or RED.
   Use 3-D only for 3x3 matrices or ideas that need depth; everything 2x2 stays in 2-D.
+
+SPACE VIEW RECIPES (ALWAYS use the matching one: these calls draw the standard picture, so never rebuild
+it by hand, e.g. never add the eigenvectors yourself with add_vector after transform_space):
+  matrix·vector / linear combination: add_vector(v) -> show_combination(v) -> transform_space(A) -> label_landings()
+  eigenvectors: show_matrix(A) -> show_off_span(non_eigen_v) -> show_eigenvectors(A) -> transform_space(A)
+      -> label_eigen_stretch(); then the check A·v = λ·v as a work line in plane.panel(...)
+  determinant: add_unit_square() -> show_determinant() -> transform_space(A); for det < 0 and det = 0 use
+      a new Plane2D (after clear_stage) with such a matrix: the readout turns red / says "squished flat"
+  inverse: transform_space(A) -> show_matrix(A⁻¹, name="A⁻¹") -> reset_space() (it undoes A exactly)
+  composition / matrix product: compose([(first, "B"), (second, "A")])
+  rank / column space / null space: a matrix with dependent columns: everything lands on one line
+  3x3: the same recipes with Space3D in a ThreeDScene (add_unit_cube instead of add_unit_square)
+  Keep the grid on screen for the WHOLE explanation: start each step with clear_stage(self, plane). Put
+  calculations in plane.panel(work_text(...)) or a small NumberMatrix in plane.panel(...) over the grid,
+  NOT on separate empty black screens, and never put plain Text in the middle of the grid. Only switch
+  to a new Plane2D (clear_stage(self) first) when a new matrix needs a fresh grid. With many vectors, use
+  add_vector(..., label=None, show_coords=False) or add_points(...) so labels do not crowd the picture.
+  The recap at the end is text only: clear_stage(self) first (the grid goes), then fit_to(recap, "main").
 
 SPACE VIEW EXAMPLE:
     def step_transform(self):
         A = np.array([[2, 1], [1, 3]], dtype=float)
-        plane = Plane2D(self, matrices=[A], vectors=[[3, -1]])
-        plane.show_matrix(A, name="A")
-        v = plane.add_vector([3, -1], label="v")
+        self.plane = Plane2D(self, matrices=[A], vectors=[[3, -1]])
+        self.plane.show_matrix(A, name="A")
+        self.v = self.plane.add_vector([3, -1], label="v")
         self.n.say("Any vector is a mix of î and ĵ: here v = 3·î − 1·ĵ.")
-        plane.show_combination(v)
+        self.plane.show_combination(self.v)
         self.n.say("Now apply A. Watch where the green and red arrows land.")
-        plane.transform_space(A)
-        plane.label_landings()
+        self.plane.transform_space(A)
+        self.plane.label_landings()
         self.n.say("î landed on column 1 of A and ĵ on column 2, so v landed on 3·(column 1) − 1·(column 2).")
+
+    def step_check(self):
+        clear_stage(self, self.plane)                     # the grid stays, old notes go
+        set_title(self, "Check with the numbers")
+        eq = work_text("A·v = 3·[2, 1] − 1·[1, 3] = [5, 0]")
+        self.plane.panel(eq)
+        self.n.say("Column 1 times 3 plus column 2 times −1 gives exactly where v landed.")
+        self.play(FadeOut(eq))
 
 CORRECT USAGE PATTERN (generic example: a per-column operation with every number shown):
     def step_example(self):

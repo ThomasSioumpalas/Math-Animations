@@ -150,9 +150,12 @@ def _ask(job: Job, user_content: str, temperature: float) -> str:
 
 
 def _run(job: Job) -> None:
+    """Write -> quick check (no frames drawn, seconds) -> fix -> ... -> ONE real render at the chosen quality.
+    Crashes and the length limit always get fix rounds; layout-only problems get at most
+    MAX_LAYOUT_FIX_ROUNDS, because most are prevented by the kit and each round costs a full AI call."""
     work = config.WORK_DIR / job.id
-    best = config.WORK_DIR / f"{job.id}_best.mp4"   # rendered video that only has layout warnings
-    best_code, best_notes = "", []
+    best_code, best_notes, best_len = "", [], 0.0   # a version that works but still has minor layout problems
+    layout_rounds = 0
     try:
         _check(job)  # cancelled while still queued
         _set(job, status="writing", message="AI is planning the storyboard and writing the Manim code…", attempt=1)
@@ -167,20 +170,23 @@ def _run(job: Job) -> None:
             else:
                 _check(job)
                 _set(job, status="rendering",
-                     message="Rendering video…" if attempt == 1 else f"Rendering fixed version ({attempt}/{job.max_attempts})…")
-                result = sandbox.render(code, work, "low", on_start=lambda p: _track(job, p))
+                     message="Checking the animation…" if attempt == 1 else f"Checking the fixed version ({attempt}/{job.max_attempts})…")
+                result = sandbox.check(code, work, on_start=lambda p: _track(job, p))
                 _procs.pop(job.id, None)
                 _check(job)
-                if result.ok and result.video and not result.warnings:
-                    job.layout_notes = []
-                    _save(job, _final_render(job, code, result.video))
-                    return
-                if result.ok and result.video:
-                    # Rendered, but text overlaps / leaves the screen: keep it as a fallback and ask for a fix.
-                    if not best_code or len(result.warnings) <= len(best_notes):
-                        shutil.copyfile(result.video, best)
-                        best_code, best_notes = code, result.warnings
-                    error = ("The video rendered, but the automatic layout check found these problems. "
+                if result.ok and result.warnings and (not best_code or len(result.warnings) <= len(best_notes)):
+                    best_code, best_notes, best_len = code, result.warnings, result.duration
+                if result.ok and (not result.warnings or layout_rounds >= config.MAX_LAYOUT_FIX_ROUNDS
+                                  or attempt == job.max_attempts):
+                    final = _final_render(job, code, result.duration)
+                    if final.ok:
+                        job.layout_notes = list(result.warnings)
+                        _save(job, final.video)
+                        return
+                    error = final.error   # rare: the full render failed although the check passed
+                elif result.ok:
+                    layout_rounds += 1
+                    error = ("The animation works, but the automatic layout check found these problems. "
                              "Fix them by repositioning, resizing or fading out objects (use the studio_kit "
                              "zones):\n- " + "\n- ".join(result.warnings))
                 else:
@@ -193,11 +199,13 @@ def _run(job: Job) -> None:
             code = _ask(job, prompts.fix_prompt(job.prompt, code, error), 0.2)
 
         _check(job)
-        if best_code:
+        if best_code:  # nothing perfect: use the best working version (its notes are shown with the video)
             job.code, job.layout_notes = best_code, best_notes
             job.title = sandbox.extract_title(best_code, job.prompt)
-            _save(job, _final_render(job, best_code, best))
-            return
+            final = _final_render(job, best_code, best_len)
+            if final.ok:
+                _save(job, final.video)
+                return
         _set(job, status="failed", message="Could not produce a working animation. Try rephrasing or simplifying.")
     except _Cancelled:
         pass  # status is already "cancelled"
@@ -212,28 +220,27 @@ def _run(job: Job) -> None:
         job.finished_at = job.finished_at or time.time()
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(config.WORK_DIR / f"{job.id}_final", ignore_errors=True)
-        best.unlink(missing_ok=True)
         store.unpin(job.sid)
 
 
-def _final_render(job: Job, code: str, draft):
-    """Drafts render at 480p so fix rounds stay fast; the version that passed every check is rendered
-    once more at the quality the user picked. If that fails for any reason, the 480p draft is kept."""
-    if job.quality == "low":
-        return draft
+def _final_render(job: Job, code: str, video_seconds: float = 0.0):
+    """The one real render, at the quality the user picked (default 720p)."""
     _check(job)
-    label = {"medium": "720p", "high": "1080p"}.get(job.quality, job.quality)
-    _set(job, status="rendering", message=f"All checks passed. Rendering the final {label} version…")
-    final_work = config.WORK_DIR / f"{job.id}_final"
-    result = sandbox.render(code, final_work, job.quality, on_start=lambda p: _track(job, p),
-                            timeout=config.FINAL_RENDER_TIMEOUT_SECONDS)
+    label = {"low": "480p", "medium": "720p", "high": "1080p"}.get(job.quality, job.quality)
+    base = f"All checks passed. Rendering the {label} video"
+    _set(job, status="rendering", message=base + "…")
+
+    def progress(done: float) -> None:   # seconds of video rendered so far (from the renderer)
+        if video_seconds > 0 and job.status == "rendering":
+            pct = int(min(99, 100 * done / video_seconds))
+            _set(job, message=f"{base}… {pct}%")
+
+    result = sandbox.render(code, config.WORK_DIR / f"{job.id}_final", job.quality,
+                            on_start=lambda p: _track(job, p), timeout=config.FINAL_RENDER_TIMEOUT_SECONDS,
+                            on_progress=progress)
     _procs.pop(job.id, None)
     _check(job)
-    if result.ok and result.video:
-        return result.video
-    print(f"[jobs] final {label} render failed, keeping the 480p draft: {result.error[-300:]}", flush=True)
-    job.quality = "low"
-    return draft
+    return result
 
 
 def _save(job: Job, video_path) -> None:

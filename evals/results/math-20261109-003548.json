@@ -1,0 +1,393 @@
+{
+ "glm-4.7-flash": [
+  {
+   "id": "eigenvalues",
+   "ok": true,
+   "got": [
+    1,
+    3
+   ],
+   "want": [
+    1.0,
+    3.0
+   ],
+   "seconds": 80.7,
+   "error": ""
+  },
+  {
+   "id": "det3x3",
+   "ok": false,
+   "got": null,
+   "want": 0.0,
+   "seconds": 420.0,
+   "error": "glm-4.7-flash: answer took longer than 420s"
+  },
+  {
+   "id": "standardize_xtx",
+   "ok": false,
+   "got": null,
+   "want": 3.2,
+   "seconds": 1.4,
+   "error": "glm-4.7-flash: rate limited"
+  },
+  {
+   "id": "bayes",
+   "ok": false,
+   "got": null,
+   "want": 0.15384615384615385,
+   "seconds": 0.9,
+   "error": "glm-4.7-flash: rate limited"
+  },
+  {
+   "id": "entropy_bits",
+   "ok": false,
+   "got": null,
+   "want": 1.1567796494470395,
+   "seconds": 1.2,
+   "error": "glm-4.7-flash: rate limited"
+  },
+  {
+   "id": "kl_bits",
+   "ok": false,
+   "got": null,
+   "want": 0.42818285127411676,
+   "seconds": 0.8,
+   "error": "glm-4.7-flash: rate limited"
+  },
+  {
+   "id": "least_squares",
+   "ok": false,
+   "got": null,
+   "want": [
+    1.1666666666666665,
+    0.4999999999999998
+   ],
+   "seconds": 1.5,
+   "error": "glm-4.7-flash: rate limited"
+  },
+  {
+   "id": "pca_top",
+   "ok": false,
+   "got": null,
+   "want": 41.24845673131659,
+   "seconds": 1.2,
+   "error": "glm-4.7-flash: rate limited"
+  },
+  {
+   "id": "singular_values",
+   "ok": false,
+   "got": null,
+   "want": [
+    6.70820393249937,
+    2.2360679774997894
+   ],
+   "seconds": 0.9,
+   "error": "glm-4.7-flash: rate limited"
+  },
+  {
+   "id": "unbiased_var",
+   "ok": false,
+   "got": null,
+   "want": 13.0,
+   "seconds": 1.1,
+   "error": "glm-4.7-flash: rate limited"
+  }
+ ],
+ "gpt-oss-120b": [
+  {
+   "id": "eigenvalues",
+   "ok": true,
+   "got": [
+    1,
+    3
+   ],
+   "want": [
+    1.0,
+    3.0
+   ],
+   "seconds": 3.1,
+   "error": ""
+  },
+  {
+   "id": "det3x3",
+   "ok": true,
+   "got": 0,
+   "want": 0.0,
+   "seconds": 11.1,
+   "error": ""
+  },
+  {
+   "id": "standardize_xtx",
+   "ok": true,
+   "got": 3.2,
+   "want": 3.2,
+   "seconds": 15.2,
+   "error": ""
+  },
+  {
+   "id": "bayes",
+   "ok": true,
+   "got": 0.15384615384615385,
+   "want": 0.15384615384615385,
+   "seconds": 10.0,
+   "error": ""
+  },
+  {
+   "id": "entropy_bits",
+   "ok": true,
+   "got": 1.15678,
+   "want": 1.1567796494470395,
+   "seconds": 11.0,
+   "error": ""
+  },
+  {
+   "id": "kl_bits",
+   "ok": true,
+   "got": 0.4281828513,
+   "want": 0.42818285127411676,
+   "seconds": 67.1,
+   "error": ""
+  },
+  {
+   "id": "least_squares",
+   "ok": true,
+   "got": [
+    1.1666666666666667,
+    0.5
+   ],
+   "want": [
+    1.1666666666666665,
+    0.4999999999999998
+   ],
+   "seconds": 12.2,
+   "error": ""
+  },
+  {
+   "id": "pca_top",
+   "ok": false,
+   "got": null,
+   "want": 41.24845673131659,
+   "seconds": 420.0,
+   "error": "gpt-oss-120b: answer took longer than 420s"
+  },
+  {
+   "id": "singular_values",
+   "ok": true,
+   "got": [
+    6.7082039325,
+    2.2360679775
+   ],
+   "want": [
+    6.70820393249937,
+    2.2360679774997894
+   ],
+   "seconds": 14.0,
+   "error": ""
+  },
+  {
+   "id": "unbiased_var",
+   "ok": true,
+   "got": 13,
+   "want": 13.0,
+   "seconds": 4.0,
+   "error": ""
+  }
+ ],
+ "qwen3.5-397b": [
+  {
+   "id": "eigenvalues",
+   "ok": true,
+   "got": [
+    1,
+    3
+   ],
+   "want": [
+    1.0,
+    3.0
+   ],
+   "seconds": 20.7,
+   "error": ""
+  },
+  {
+   "id": "det3x3",
+   "ok": true,
+   "got": 0,
+   "want": 0.0,
+   "seconds": 44.5,
+   "error": ""
+  },
+  {
+   "id": "standardize_xtx",
+   "ok": true,
+   "got": 3.2,
+   "want": 3.2,
+   "seconds": 177.8,
+   "error": ""
+  },
+  {
+   "id": "bayes",
+   "ok": true,
+   "got": 0.15384615384615385,
+   "want": 0.15384615384615385,
+   "seconds": 42.7,
+   "error": ""
+  },
+  {
+   "id": "entropy_bits",
+   "ok": true,
+   "got": 1.15678,
+   "want": 1.1567796494470395,
+   "seconds": 120.3,
+   "error": ""
+  },
+  {
+   "id": "kl_bits",
+   "ok": true,
+   "got": 0.42818,
+   "want": 0.42818285127411676,
+   "seconds": 116.0,
+   "error": ""
+  },
+  {
+   "id": "least_squares",
+   "ok": true,
+   "got": [
+    1.1666666666666667,
+    0.5
+   ],
+   "want": [
+    1.1666666666666665,
+    0.4999999999999998
+   ],
+   "seconds": 88.9,
+   "error": ""
+  },
+  {
+   "id": "pca_top",
+   "ok": true,
+   "got": 41.2484567313,
+   "want": 41.24845673131659,
+   "seconds": 57.0,
+   "error": ""
+  },
+  {
+   "id": "singular_values",
+   "ok": false,
+   "got": null,
+   "want": [
+    6.70820393249937,
+    2.2360679774997894
+   ],
+   "seconds": 420.0,
+   "error": "qwen3.5-397b: answer took longer than 420s"
+  },
+  {
+   "id": "unbiased_var",
+   "ok": true,
+   "got": 13,
+   "want": 13.0,
+   "seconds": 20.5,
+   "error": ""
+  }
+ ],
+ "gpt-oss-20b@ovh": [
+  {
+   "id": "eigenvalues",
+   "ok": true,
+   "got": [
+    1,
+    3
+   ],
+   "want": [
+    1.0,
+    3.0
+   ],
+   "seconds": 4.2,
+   "error": ""
+  },
+  {
+   "id": "det3x3",
+   "ok": true,
+   "got": 0,
+   "want": 0.0,
+   "seconds": 10.3,
+   "error": ""
+  },
+  {
+   "id": "standardize_xtx",
+   "ok": false,
+   "got": null,
+   "want": 3.2,
+   "seconds": 362.1,
+   "error": "gpt-oss-20b@ovh: empty response"
+  },
+  {
+   "id": "bayes",
+   "ok": true,
+   "got": 0.15384615384615385,
+   "want": 0.15384615384615385,
+   "seconds": 31.7,
+   "error": ""
+  },
+  {
+   "id": "entropy_bits",
+   "ok": true,
+   "got": 1.15678,
+   "want": 1.1567796494470395,
+   "seconds": 19.4,
+   "error": ""
+  },
+  {
+   "id": "kl_bits",
+   "ok": false,
+   "got": null,
+   "want": 0.42818285127411676,
+   "seconds": 420.0,
+   "error": "gpt-oss-20b@ovh: answer took longer than 420s"
+  },
+  {
+   "id": "least_squares",
+   "ok": true,
+   "got": [
+    1.1666666666666667,
+    0.5
+   ],
+   "want": [
+    1.1666666666666665,
+    0.4999999999999998
+   ],
+   "seconds": 24.8,
+   "error": ""
+  },
+  {
+   "id": "pca_top",
+   "ok": true,
+   "got": 41.248456,
+   "want": 41.24845673131659,
+   "seconds": 277.5,
+   "error": ""
+  },
+  {
+   "id": "singular_values",
+   "ok": true,
+   "got": [
+    6.708203932499369,
+    2.23606797749979
+   ],
+   "want": [
+    6.70820393249937,
+    2.2360679774997894
+   ],
+   "seconds": 28.6,
+   "error": ""
+  },
+  {
+   "id": "unbiased_var",
+   "ok": true,
+   "got": 13,
+   "want": 13.0,
+   "seconds": 2.9,
+   "error": ""
+  }
+ ]
+}

@@ -54,13 +54,20 @@ _GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 # Several Gemini models in a row: each has its own free quota, and when the newest one is
 # overloaded (free tier gets the lowest priority) the next one usually answers in seconds.
 _GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.8-flash,gemini-3.6-flash").split(",") if m.strip()]
-PROVIDERS = [(f"Gemini {m.removeprefix('gemini-')}", _GEMINI_BASE, _GEMINI_KEY, m) for m in _GEMINI_MODELS] + [
+_OVH_BASE = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+_OVH_KEY = "anonymous" if _bool("OVH_ENABLED", True) else ""   # keyless: 2 requests/min per IP per model
+PROVIDERS = [
+    # First: gpt-oss-120b (OVHcloud, no key, no token budget). Best speed/accuracy in evals/model_eval.py
+    # (math 9/10, median 12 s). When it is rate limited (HTTP 429), errors or stays silent for
+    # LLM_FIRST_TOKEN_SECONDS, the chain moves on: Gemini -> NVIDIA -> Qwen -> GLM.
+    ("gpt-oss-120b", _OVH_BASE, _OVH_KEY, os.getenv("OVH_FAST_MODEL", "gpt-oss-120b")),
+] + [(f"Gemini {m.removeprefix('gemini-')}", _GEMINI_BASE, _GEMINI_KEY, m) for m in _GEMINI_MODELS] + [
     ("NVIDIA", "https://integrate.api.nvidia.com/v1",
      os.getenv("NVIDIA_API_KEY", ""), os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")),
+    # Last-resort backups: Qwen 3.5 (9/10 but ~6x slower), GLM (one request at a time).
+    ("Qwen 3.5", _OVH_BASE, _OVH_KEY, os.getenv("OVH_MODEL", "Qwen3.5-397B-A17B")),
     ("Z.ai", "https://api.z.ai/api/paas/v4",
      os.getenv("ZAI_API_KEY", ""), os.getenv("ZAI_MODEL", "glm-4.7-flash")),
-    ("OVHcloud", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
-     "anonymous" if _bool("OVH_ENABLED", True) else "", os.getenv("OVH_MODEL", "Qwen3.5-397B-A17B")),
 ]
 # Optional extra OpenAI-compatible provider, tried last (e.g. a paid key later).
 if os.getenv("CUSTOM_LLM_BASE_URL") and os.getenv("CUSTOM_LLM_MODEL"):
@@ -77,8 +84,9 @@ VIDEO_REASONING_EFFORT = os.getenv("VIDEO_REASONING_EFFORT", "high")   # writing
 LLM_DAILY_CALL_LIMIT = _int("LLM_DAILY_CALL_LIMIT", 0)  # 0 = no site-wide cap
 
 # --- rendering -----------------------------------------------------------------
-MAX_FIX_ATTEMPTS = _int("MAX_FIX_ATTEMPTS", 3)          # LLM repair rounds after a failed render
-RENDER_TIMEOUT_SECONDS = _int("RENDER_TIMEOUT_SECONDS", 600)          # 480p draft renders
+MAX_FIX_ATTEMPTS = _int("MAX_FIX_ATTEMPTS", 3)            # versions the AI may write (first + fixes)
+MAX_LAYOUT_FIX_ROUNDS = _int("MAX_LAYOUT_FIX_ROUNDS", 1)  # extra AI rounds spent on layout-only problems
+RENDER_TIMEOUT_SECONDS = _int("RENDER_TIMEOUT_SECONDS", 600)          # check runs (no frames drawn)
 FINAL_RENDER_TIMEOUT_SECONDS = _int("FINAL_RENDER_TIMEOUT_SECONDS", 2400)  # the one 720p/1080p render
 RENDER_WORKERS = _int("RENDER_WORKERS", 1)               # parallel renders (CPU bound)
 MAX_VIDEO_SECONDS = _int("MAX_VIDEO_SECONDS", 360)

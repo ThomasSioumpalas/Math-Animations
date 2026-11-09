@@ -18,6 +18,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import json
 from dataclasses import dataclass, field
@@ -173,6 +174,7 @@ class RenderResult:
     seconds: float
     warnings: list = field(default_factory=list)  # layout problems found while rendering
     log: str = ""                                 # tail of the renderer output (diagnostics)
+    duration: float = 0.0                         # length of the video in seconds (known after a check)
 
 
 QUALITY = {"low": "low_quality", "medium": "medium_quality", "high": "high_quality"}
@@ -214,8 +216,16 @@ def kill(proc) -> None:
         pass
 
 
-def render(code: str, work: Path, quality: str = "low", on_start=None, timeout: int | None = None) -> RenderResult:
-    """Render GeneratedScene from `code` inside `work`. Never raises."""
+def check(code: str, work: Path, on_start=None) -> RenderResult:
+    """Run the scene without drawing frames (seconds instead of minutes): finds crashes, the length
+    limit and layout problems. ok=True means a real render will work; video is None."""
+    return render(code, work, "low", on_start=on_start, mode="check")
+
+
+def render(code: str, work: Path, quality: str = "low", on_start=None, timeout: int | None = None,
+           mode: str = "render", on_progress=None) -> RenderResult:
+    """Render GeneratedScene from `code` inside `work`. Never raises.
+    on_progress(seconds_of_video_done) is called while a real render runs."""
     t0 = time.time()
     if work.exists():
         shutil.rmtree(work, ignore_errors=True)
@@ -225,7 +235,7 @@ def render(code: str, work: Path, quality: str = "low", on_start=None, timeout: 
     cmd = [
         sys.executable, "-I", str(Path(__file__).with_name("render_runner.py")),
         str(work), SCENE_NAME, QUALITY.get(quality, "low_quality"),
-        str(config.MAX_VIDEO_SECONDS), str(config.SESSIONS_DIR),
+        str(config.MAX_VIDEO_SECONDS), str(config.SESSIONS_DIR), mode,
     ]
     posix = os.name == "posix"
     try:
@@ -236,21 +246,39 @@ def render(code: str, work: Path, quality: str = "low", on_start=None, timeout: 
         )
         if on_start is not None:
             on_start(proc)
+        lines: list[str] = []
+
+        def pump():  # read the output as it comes, so progress lines arrive live
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace")
+                if line.startswith("__T__="):
+                    if on_progress is not None:
+                        try:
+                            on_progress(float(line[6:]))
+                        except Exception:
+                            pass
+                    continue
+                lines.append(line)
+
+        reader = threading.Thread(target=pump, daemon=True)
+        reader.start()
         try:
-            out, _ = proc.communicate(timeout=timeout or config.RENDER_TIMEOUT_SECONDS)
+            proc.wait(timeout=timeout or config.RENDER_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             if posix:
                 os.killpg(proc.pid, signal.SIGKILL)
             else:
                 proc.kill()
-            proc.communicate()
+            proc.wait()
+            reader.join(timeout=5)
             return RenderResult(False, None,
                                 f"Render timed out after {timeout or config.RENDER_TIMEOUT_SECONDS}s. "
                                 "Make the animation shorter / simpler.", time.time() - t0)
+        reader.join(timeout=10)
     except Exception as e:
         return RenderResult(False, None, f"Could not start renderer: {e}", time.time() - t0)
 
-    log = out.decode("utf-8", "replace")
+    log = "".join(lines)
     m = re.search(r"^__VIDEO__=(.+)$", log, re.M)
     warnings: list[str] = []
     for line in re.findall(r"^__LAYOUT__=(.+)$", log, re.M):
@@ -258,6 +286,10 @@ def render(code: str, work: Path, quality: str = "low", on_start=None, timeout: 
             warnings.extend(json.loads(line))
         except ValueError:
             pass
+    if mode == "check" and proc.returncode == 0 and "__CHECKED__" in log:
+        d = re.search(r"__CHECKED__ duration=([\d.]+)", log)
+        return RenderResult(True, None, "", time.time() - t0, warnings[:12], log[-2000:],
+                            float(d.group(1)) if d else 0.0)
     if proc.returncode == 0 and m and Path(m.group(1).strip()).is_file():
         return RenderResult(True, Path(m.group(1).strip()), "", time.time() - t0, warnings[:12], log[-2000:])
     if proc.returncode and proc.returncode < 0:

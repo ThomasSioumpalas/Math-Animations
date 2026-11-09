@@ -60,7 +60,7 @@ Limits of this approach, which are fine for an MVP:
 |---|---|---|
 | Lovable for the site | React + Vite in this repo, served by FastAPI in Docker | Lovable makes frontends with Supabase backends. It **cannot run Python/Manim**, which needs ffmpeg, cairo, pango and LaTeX on a real machine. A Lovable frontend would still need this same backend somewhere, so one container is simpler. |
 | Login page for persistence | Anonymous cookie + disk + 1 h TTL | It meets the goal with no DB, passwords or GDPR work. Real accounts can come later (§6). |
-| Kimi directly | **Chain of free providers**: Gemini 3.8 Flash → Gemma 4 31B (NVIDIA) → GLM-4.7-Flash (Z.ai) → Qwen 3.5 397B (OVHcloud) | Kimi has no free API anymore, and Groq's models were too weak. Gemini 3.8 Flash has the best published math result of any free model (FrontierMath 68%). No free provider is unlimited, so `server/llm.py` falls through the chain automatically when one is rate-limited. |
+| Kimi directly | **Chain of free providers**: gpt-oss-120b (OVHcloud, no key) → Gemini 3.8 Flash → Gemini 3.6 Flash → Nemotron 3 Ultra (NVIDIA) → Qwen 3.5 397B (OVHcloud) → GLM-4.7-Flash (Z.ai) | Kimi has no free API anymore. gpt-oss-120b scored 9/10 in `evals/model_eval.py` and is the fastest, with no daily quota (keyless OVH use is limited to 2 requests/min per IP). No free provider is unlimited, so `server/llm.py` falls through the chain automatically when one is rate-limited (429), fails, or stays silent for 75 s. |
 | Render (like ReportLens) | **Hugging Face Space (Gradio SDK on ZeroGPU)**; `Dockerfile` + `render.yaml` kept as alternatives | HF made Docker Spaces PRO-only in 2026, but free accounts can still run 2 Gradio Spaces on ZeroGPU (2 vCPU / 16 GB). `hf_space/app.py` runs our FastAPI app inside one, with a dummy `@spaces.GPU` function so it boots. Render free (0.1 CPU / 512 MB, sleeps after 15 min) is too weak for Manim. |
 | "Use all the libraries" | Allow-list: manim, numpy, scipy, networkx, math, random… | The AI's code runs **on your server**, so it can't be allowed to `import os` or open sockets. See §5. |
 
@@ -76,7 +76,7 @@ server's API key" must not work. Defences in this repo:
    blocks starting processes (except `latex`/`dvisvgm`), sockets, writes outside the job folder,
    and reads of `/proc`, `/sys` or other users' sessions.
 3. **Process isolation**: separate subprocess with secrets stripped from its environment,
-   a wall-clock timeout, CPU/memory/file-size limits (Linux), a 120 s video-length cap, and
+   a wall-clock timeout, CPU/memory/file-size limits (Linux), a 360 s video-length cap, and
    LaTeX in "paranoid" mode (no reading files outside the job folder).
 4. **Abuse limits**: prompt length, jobs per hour per browser, 2 concurrent jobs per browser,
    40 videos per browser, and a site-wide daily LLM call cap that protects your free key.
@@ -93,8 +93,19 @@ a matrix's columns are colored like the basis vectors because column j is where 
 the yellow unit square/cube's signed area/volume is the determinant; eigenvectors are shown as families
 of vectors that stay on their dashed span lines. This lives in `server/kit/studio_space.py` (`Plane2D`,
 `Space3D`), and all text uses Computer Modern (CMU Serif, bundled under the SIL Open Font License).
-Videos default to 720p: drafts render at 480p for fast checks, and only the version that passed is
-rendered again at 720p. Captions carry the explanation (no voice-over, by choice).
+Videos default to 720p. Captions carry the explanation (no voice-over, by choice).
+
+**Speed.** A job is: AI writes the code → a *check run* executes the whole scene without drawing frames
+(Manim skip mode, ~20–40 s; finds crashes, the length limit and layout problems) → AI fix rounds only if
+needed (layout-only problems get at most one) → ONE real render at the chosen quality. What keeps the
+render near real time (a 145 s eigenvector video: 720p in ~165 s on a laptop, was ~430 s):
+- the grid is drawn as a few multi-stroke shapes, not hundreds of `Line`/dash objects;
+- the space view sits at the back of the scene, so Manim does not redraw it on every caption change
+  (it redraws everything listed after the first moving object);
+- kit labels find free spots with numpy bounding boxes instead of Manim's slow per-coordinate getters;
+- Text copies share their parsed glyph paths (FadeIn/FadeOut copy every caption: ~150 ms → ~25 ms);
+- Manim encodes finished animations in background threads (`max_inflight_encoders=4`) with x264
+  `veryfast` / `tune=animation`.
 
 ## 7. Roadmap: changes for later
 

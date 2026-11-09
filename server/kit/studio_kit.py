@@ -41,6 +41,22 @@ if FONT:
     Text.set_default(font=FONT)
     MarkupText.set_default(font=FONT)
 
+# Speed: every FadeIn / FadeOut / Transform deep-copies its mobject, and each glyph of a Text keeps its
+# parsed SVG path, which costs ~1-2 ms per character to copy (a caption: ~150 ms per copy). The path is
+# never changed once the glyph's points are built, so copies share it (Text copies get ~10x faster).
+try:
+    from manim.mobject.svg.svg_mobject import VMobjectFromSVGPath
+
+    def _deepcopy_sharing_svg_path(self, memo):
+        path = self.__dict__.get("path_obj")
+        if path is not None:
+            memo[id(path)] = path
+        return Mobject.__deepcopy__(self, memo)
+
+    VMobjectFromSVGPath.__deepcopy__ = _deepcopy_sharing_svg_path
+except ImportError:  # pragma: no cover - other Manim layouts
+    pass
+
 __all__ = [
     "ZONES", "fmt", "fit_to", "set_title", "Narrator", "NumberMatrix", "show_dot_product",
     "transform_column", "animate_transpose", "work_text", "DataPlot", "clear_stage",
@@ -141,11 +157,21 @@ class Narrator:
 
 def clear_stage(scene: Scene, *keep: Mobject, run_time: float = 0.8) -> None:
     """Fade out everything on screen except the title, the current caption and `keep`.
-    Call it between storyboard steps so old matrices, plots, dots and highlights never pile up."""
-    keep = tuple(m for m in keep if m is not None)
-    protected = {id(m) for m in keep}
-    for m in keep:  # a kept plot keeps its dots
-        for g in _PLOT_DOTS.get(id(m), []):
+    Call it between storyboard steps so old matrices, plots, dots and highlights never pile up.
+    `keep` may be a Plane2D / Space3D: its grid, vectors, their labels and the matrix panel stay."""
+    protected = set()
+    for m in keep:
+        if m is None:
+            continue
+        if not isinstance(m, Mobject) and hasattr(m, "_kept_mobjects"):   # a Plane2D / Space3D
+            mobs = m._kept_mobjects()
+        elif isinstance(m, Mobject):
+            mobs = [m]
+        else:
+            continue
+        for k in mobs:   # whole families: Manim may have split a group into its parts on screen
+            protected.update(id(x) for x in k.get_family())
+        for g in _PLOT_DOTS.get(id(m), []):  # a kept plot keeps its dots
             protected.add(id(g))
             protected.update(id(d) for d in g)
     title = getattr(scene, "_kit_title", None)
@@ -292,6 +318,15 @@ class NumberMatrix(VGroup):
         if new_h > 0 and old_h > 0:
             target.scale(old_h / new_h, about_point=ORIGIN)
         target.shift(center - VGroup(cells, brackets).get_center())
+        bg = getattr(self, "_kit_panel_bg", None)
+        if bg is not None:  # a matrix shown on a panel: its dark box is its first part and resizes with it
+            target.add_to_back(type(bg)(target, color=BLACK, fill_opacity=bg.get_fill_opacity(), buff=0.18))
+            # it hugs a screen corner: keep that outer edge and the top in place (grow inwards, not off-screen)
+            if getattr(self, "_kit_panel_side", "right") == "left":
+                target.shift(RIGHT * (self.get_left()[0] - target.get_left()[0]))
+            else:
+                target.shift(RIGHT * (self.get_right()[0] - target.get_right()[0]))
+            target.shift(UP * (self.get_top()[1] - target.get_top()[1]))
         texts = [(self._grid[i][j], self._strings[i][j]) for i in range(len(grid)) for j in range(len(grid[0]))]
         return _MatrixTransform(self, target, texts)
 

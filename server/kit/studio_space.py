@@ -19,11 +19,14 @@ import numpy as np
 import scipy.linalg
 from manim import (
     BLACK, DEGREES, DOWN, LEFT, RIGHT, UL, UP, UR, WHITE, YELLOW,
-    Animation, Arrow, Create, DashedLine, Dot, FadeIn, FadeOut, GrowArrow, Line,
-    Mobject, Polygon, Scene, SurroundingRectangle, Text, ThreeDScene, VGroup,
+    Animation, Arrow, BackgroundRectangle, Create, Dot, FadeIn, FadeOut, GrowArrow, Line,
+    MarkupText, Mobject, Polygon, Scene, SingleStringMathTex, SurroundingRectangle, Text, ThreeDScene,
+    VGroup, VMobject,
 )
 
 from studio_kit import NumberMatrix, boxed, fmt, hud
+
+_TEXTY = (Text, MarkupText, SingleStringMathTex, NumberMatrix)
 
 I_COLOR, J_COLOR, K_COLOR = "#83C167", "#FC6255", "#58C4DD"   # î green, ĵ red, k̂ blue
 GRID_COLOR = "#29ABCA"
@@ -34,6 +37,56 @@ SAFE_X, SAFE_TOP, SAFE_BOTTOM = 6.9, 3.0, -2.62                  # clear of the 
 
 
 # ----------------------------------------------------------------------------- helpers
+def _shown(method):
+    """Public stage methods first bring the grid back if clear_stage(self) faded it out."""
+    def wrapper(self, *args, **kwargs):
+        self._ensure_shown()
+        return method(self, *args, **kwargs)
+    wrapper.__doc__, wrapper.__name__ = method.__doc__, method.__name__
+    return wrapper
+
+
+def _bbox(m):
+    """(center x, center y, half width, half height) from the raw points: much faster than Manim's
+    get_center()/width, which walk the family in Python for every coordinate. None if m has no points."""
+    pts = [sm.points for sm in m.get_family() if len(sm.points)]
+    if not pts:
+        return None
+    a = np.vstack(pts)
+    lo, hi = a.min(axis=0), a.max(axis=0)
+    return ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (hi[0] - lo[0]) / 2, (hi[1] - lo[1]) / 2)
+
+
+def _segments(pairs, **style) -> VMobject:
+    """Many straight strokes as ONE shape (one draw call per frame instead of one per line)."""
+    pts = []
+    for a, b in pairs:
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        pts += [a, a + (b - a) / 3, a + 2 * (b - a) / 3, b]
+    vm = VMobject(**style)
+    vm.set_points(np.array(pts) if pts else np.zeros((0, 3)))
+    return vm
+
+
+def _dashed(a, b, dash_length: float = 0.15, **style) -> VMobject:
+    """A dashed line as ONE shape (Manim's DashedLine is one shape per dash)."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    length = float(np.linalg.norm(b - a))
+    n = max(2, int(np.ceil(length * 0.5 / dash_length)))
+    period = (b - a) / n
+    return _segments([(a + k * period, a + (k + 0.5) * period) for k in range(n)], **style)
+
+
+def _text_boxes(m) -> list:
+    """Bounding boxes of the text-like parts of m (each Text/MathTex/matrix of a VGroup separately)."""
+    if isinstance(m, _TEXTY):
+        return [_bbox(m)]
+    out = []
+    for sm in m.submobjects:
+        out += _text_boxes(sm)
+    return out
+
+
 def _path(A: np.ndarray):
     """Matrix path M(t) from the identity (t=0) to A (t=1), as a viewer expects to see it:
     shears and stretches slide straight; rotations (and rotation-heavy maps) turn rigidly instead
@@ -110,6 +163,8 @@ class _SpaceMorph(Animation):
         for key, (d, c) in list(st._anchors.items()):
             st._anchors[key] = (d, self.A @ c)
         st.M = self.A @ st.M
+        for lab in st._labels:   # new coordinates in the labels now (a check run skips Manim's own update)
+            lab.update(0)
 
 
 class _Stage:
@@ -132,6 +187,7 @@ class _Stage:
         self.square = None
         self.basis = []
         self.matrix_panel = None
+        self.grid = VGroup()
 
     def _embed(self, M):
         M3 = np.eye(3)
@@ -148,6 +204,12 @@ class _Stage:
     def _note(self, *mobs):
         self._notes.extend(mobs)
         return mobs
+
+    def _add_static(self, mob):
+        """A reference line that stays where it is during transformations (drawn under the arrows)."""
+        self.layer.add_to_back(mob)
+        self.layer.add_to_back(self._shapes)
+        return mob
 
     def clear_annotations(self, run_time: float = 0.5) -> None:
         """Fade out temporary labels (landing labels, stretch labels)."""
@@ -167,15 +229,82 @@ class _Stage:
         bg = SurroundingRectangle(mat, color=BLACK, fill_color=BLACK, fill_opacity=0.85, stroke_width=0, buff=0.18)
         return VGroup(bg, mat)
 
-    def _place_panel(self, panel, corner):
+    def _place_panel(self, panel, corner, ignore=()):
+        """Top-left or top-right corner; below any panel already showing there (panels never cover each other).
+        `ignore`: panels this one replaces (it takes their place instead of stacking under them)."""
         left = float(np.asarray(corner, float)[0]) < 0
         x = (-SAFE_X - 0.1 + panel.width / 2) if left else (SAFE_X + 0.1 - panel.width / 2)
-        panel.move_to([x, _top_limit(self.scene) - panel.height / 2, 0])
+        y = _top_limit(self.scene) - panel.height / 2
+        panel.move_to([x, y, 0])
+        skip = set(map(id, ignore))
+        live = [p for p in self._live(self._panels) if id(p) not in skip and p is not panel]
+        # too wide to sit beside the panel in the other top corner? shrink it to fit (down to 60 %)
+        other_side = [p for p in live if (p.get_x() < 0) != left and
+                      abs(panel.get_y() - p.get_y()) < (panel.height + p.height) / 2 + 0.05]
+        if other_side:
+            inner = (max(p.get_right()[0] for p in other_side) if not left
+                     else min(p.get_left()[0] for p in other_side))
+            room = (SAFE_X + 0.1 - inner - 0.2) if not left else (inner - 0.2 + SAFE_X + 0.1)
+            if 0 < room < panel.width and room / panel.width >= 0.6:
+                panel.scale(room / panel.width)
+                x = (-SAFE_X - 0.1 + panel.width / 2) if left else (SAFE_X + 0.1 - panel.width / 2)
+                panel.move_to([x, _top_limit(self.scene) - panel.height / 2, 0])
+        for _ in range(len(live)):
+            hit = [p for p in live if p is not panel and
+                   abs(panel.get_x() - p.get_x()) < (panel.width + p.width) / 2 + 0.05 and
+                   abs(panel.get_y() - p.get_y()) < (panel.height + p.height) / 2 + 0.05]
+            if not hit:
+                break
+            panel.set_y(min(p.get_bottom()[1] for p in hit) - 0.12 - panel.height / 2)
         return panel
 
     def _register_panel(self, panel):
         self._panels.append(panel)
         return panel
+
+    def _make_panel(self, mob, corner):
+        """Put `mob` on a dark box. The box goes INSIDE mob (as its first part), so FadeOut(mob) also
+        removes it; a NumberMatrix's set_values / set_cell resize the box with the numbers."""
+        if getattr(mob, "_kit_panel_bg", None) is None:
+            bg = BackgroundRectangle(mob, color=BLACK, fill_opacity=0.85, buff=0.18)
+            mob.add_to_back(bg)
+            mob._kit_panel_bg = bg
+        mob._kit_panel_side = "left" if float(np.asarray(corner, float)[0]) < 0 else "right"
+        return self._register_panel(self._place_panel(mob, corner))
+
+    def _live(self, mobs):
+        on = set(map(id, self.scene.get_mobject_family_members()))
+        return [m for m in mobs if id(m) in on]
+
+    # -- what clear_stage keeps, and bringing the stage back
+    def _kept_mobjects(self):
+        """clear_stage(self, plane) keeps these: the grid with everything drawn on it, the labels that
+        belong to vectors (î, ĵ, v, ...), the matrix panel and the det readout. Temporary notes
+        (landing / stretch labels) and extra panels are cleared."""
+        keep = [self.background, self.layer] + [m for m in self._labels if m not in self._notes]
+        keep += list(getattr(self, "axis_labels", []))
+        if self.matrix_panel is not None:
+            keep.append(self.matrix_panel)
+        ro = getattr(self, "det_readout", None)
+        if ro is not None:
+            keep.append(ro[0] if isinstance(ro, tuple) else ro)
+        return keep
+
+    def _add_to_back_of_scene(self):
+        """Grid and arrows go BEHIND everything else (titles, captions, panels). Besides the right
+        stacking, this keeps renders fast: Manim redraws every frame all objects that come after the
+        first moving one, so a grid listed after a caption would be redrawn on every caption change."""
+        self.scene.add(self.background, self.layer)
+        self.scene.bring_to_back(self.background, self.layer)
+
+    def _ensure_shown(self):
+        """If clear_stage(self) faded the grid out and a stage method is used again, fade it back in
+        (to keep it in the first place: clear_stage(self, plane))."""
+        if self.grid in self.scene.get_mobject_family_members():
+            return
+        labels = [m for m in self._labels if m not in self._notes] + list(getattr(self, "axis_labels", []))
+        self._add_to_back_of_scene()
+        self.scene.play(FadeIn(self.background), FadeIn(self.layer), *(FadeIn(m) for m in labels), run_time=0.8)
 
 
 # ============================================================================= 2-D
@@ -189,31 +318,31 @@ class Plane2D(_Stage):
     def __init__(self, scene: Scene, matrices=(), vectors=(), unit: float | None = None,
                  show_basis: bool = True, basis_labels: bool = True, animate: bool = True):
         self._init_common(scene)
+        self.matrices = [np.asarray(A, float) for A in matrices]
+        self.vectors = [np.asarray(v, float) for v in vectors]
         self.origin = np.array([0.0, 0.18, 0.0])
         self.unit = float(unit) if unit else self._auto_unit(matrices, vectors)
         u = self.unit
+        # Lines of one style are ONE shape with many separate strokes: drawing ~100 separate Line objects
+        # per frame is what makes a grid slow to render.
         n_bg = int(np.ceil(7.8 / u))
-        bg = VGroup()
-        for k in range(-n_bg, n_bg + 1):
-            axis = k == 0
-            style = dict(stroke_color=GHOST_COLOR, stroke_width=1.6 if axis else 1,
-                         stroke_opacity=0.75 if axis else 0.4)
-            bg.add(Line(self.c2p([k, -n_bg]), self.c2p([k, n_bg]), **style))
-            bg.add(Line(self.c2p([-n_bg, k]), self.c2p([n_bg, k]), **style))
-        self.background = bg
+        ks = [k for k in range(-n_bg, n_bg + 1) if k]
+        self.background = VGroup(
+            _segments([(self.c2p([k, -n_bg]), self.c2p([k, n_bg])) for k in ks] +
+                      [(self.c2p([-n_bg, k]), self.c2p([n_bg, k])) for k in ks],
+                      stroke_color=GHOST_COLOR, stroke_width=1, stroke_opacity=0.4),
+            _segments([(self.c2p([0, -n_bg]), self.c2p([0, n_bg])), (self.c2p([-n_bg, 0]), self.c2p([n_bg, 0]))],
+                      stroke_color=GHOST_COLOR, stroke_width=1.6, stroke_opacity=0.75))
         R = int(np.ceil(8.0 / u)) * 2  # far past the screen, so edges never show after shrinking
-        lines = VGroup()
-        for k in range(-R, R + 1):
-            if k == 0:
-                continue
-            style = dict(stroke_color=GRID_COLOR, stroke_width=1.8, stroke_opacity=0.95)
-            lines.add(Line(self.c2p([k, -R]), self.c2p([k, R]), **style))
-            lines.add(Line(self.c2p([-R, k]), self.c2p([R, k]), **style))
+        ks = sorted((k for k in range(-R, R + 1) if k), key=abs)   # center first: Create grows outwards
+        style = dict(stroke_color=GRID_COLOR, stroke_width=1.8, stroke_opacity=0.95)
+        lines = VGroup(_segments([(self.c2p([k, -R]), self.c2p([k, R])) for k in ks], **style),
+                       _segments([(self.c2p([-R, k]), self.c2p([R, k])) for k in ks], **style))
         axes = VGroup(Line(self.c2p([-R, 0]), self.c2p([R, 0]), stroke_color=WHITE, stroke_width=2.4),
                       Line(self.c2p([0, -R]), self.c2p([0, R]), stroke_color=WHITE, stroke_width=2.4))
         self.grid = VGroup(lines, axes)
         self._shapes.add(self.grid)
-        scene.add(self.background, self.layer)  # the layer is the single persistent group
+        self._add_to_back_of_scene()   # the layer is the single persistent group
         if animate:
             scene.play(Create(self.grid, lag_ratio=0.01), run_time=1.5)
         if show_basis:
@@ -239,6 +368,11 @@ class Plane2D(_Stage):
         unit = min(1.0, SAFE_X / need_x, (SAFE_TOP - 0.18) / need_up, (0.18 - SAFE_BOTTOM) / need_down)
         return float(max(0.35, unit))
 
+    def _screen_reach(self) -> float:
+        """Length (in plane units) from the origin to past every screen corner: static lines need no more
+        (each dash is a separate shape to draw, so shorter lines render faster)."""
+        return 8.8 / self.unit
+
     def c2p(self, coords) -> np.ndarray:
         c = np.asarray(coords, float).ravel()
         return self.origin + self.unit * np.array([c[0], c[1], 0.0])
@@ -261,7 +395,7 @@ class Plane2D(_Stage):
             new.set_opacity(0)
         arrow.become(new)
 
-    def _label_spot(self, arrow, label, mid: bool = False):
+    def _label_spot(self, arrow, label, mid: bool = False, strict: bool = False):
         """Where a label goes: next to the arrow's tip (or beside its middle), inside the visible area,
         and not on top of a panel or another label (first free candidate wins)."""
         tip, start = arrow.get_end(), arrow.get_start()
@@ -269,42 +403,88 @@ class Plane2D(_Stage):
         n = np.linalg.norm(d)
         d = d / n if n > 1e-6 else RIGHT
         perp = np.array([-d[1], d[0], 0.0])
-        off = 0.16 + 0.5 * max(label.width, label.height)
-        w, h = label.width / 2, label.height / 2
-        top = _top_limit(self.scene)
+        box = _bbox(label)
+        off = 0.16 + max(box[2], box[3]) if box else 0.4
         if mid:
             base = (tip + start) / 2
             cands = (base + perp * off, base - perp * off, base + perp * off * 1.8, base - perp * off * 1.8)
         else:
             cands = (tip + d * off, tip + perp * off, tip - perp * off, tip + d * off + perp * off * 1.2,
-                     tip + d * off - perp * off * 1.2, tip - d * off * 2.2)
-        others = [m for m in self._panels + self._labels if m is not label and m in self.scene.mobjects]
-        # also any text the scene put on screen itself (titles, captions, notes)
-        others += [m for m in self.scene.mobjects
-                   if isinstance(m, Text) and m is not label and m not in self._labels and m.width > 1e-3]
+                     tip + d * off - perp * off * 1.2, tip - d * off * 2.2, tip + d * off * 2.2)
+        return self._free_spot(label, cands, strict=strict, box=box)
+
+    def _obstacles(self, label):
+        """Bounding boxes of the panels, labels and any text on screen (titles, captions, notes)
+        that a label must not cover."""
+        on = self.scene.mobjects
+        on_ids = set(map(id, on))
+        label_ids = set(map(id, self._labels))
+        seen, boxes = {id(label)}, []
+        for m in self._panels + self._labels:
+            if id(m) in seen or id(m) not in on_ids or getattr(m, "_kit_hidden", False):
+                continue
+            seen.add(id(m))
+            boxes.append(_bbox(m))
+        skip = seen | label_ids | {id(self.layer), id(self.background)}
+        for m in on:
+            if id(m) not in skip:
+                boxes += _text_boxes(m)
+        return [b for b in boxes if b and b[2] > 1e-3]
+
+    def _free_spot(self, label, cands, extra=(), strict: bool = False, box=None):
+        """The first candidate position (clipped to the visible area) where `label` covers nothing.
+        None when every candidate is covered and strict=True (otherwise the first candidate)."""
+        box = box or _bbox(label)
+        if not box:
+            return None if strict else np.array(cands[0], float)
+        w, h = box[2], box[3]
+        top = _top_limit(self.scene)
+        others = self._obstacles(label) + [b for b in map(_bbox, extra) if b]
         first = None
         for cand in cands:
-            spot = cand.copy()
+            spot = np.array(cand, float)
             spot[0] = np.clip(spot[0], -7.0 + w, 7.0 - w)
             spot[1] = np.clip(spot[1], SAFE_BOTTOM + h, top - h)
             first = spot if first is None else first
-            if not any(self._overlaps(spot, w, h, p) for p in others):
+            if not any(self._overlaps(spot, w, h, o) for o in others):
                 return spot
-        return first
+        return None if strict else first
+
+    def _place_label(self, m, arrow, mid: bool = False):
+        """Move a following label next to its arrow, or hide it while panels/text cover every free spot
+        (it comes back by itself as soon as there is room)."""
+        spot = self._label_spot(arrow, m, mid, strict=True)
+        hidden = getattr(m, "_kit_hidden", False)
+        if spot is None:
+            if not hidden:
+                m._kit_shown = m.copy()
+                m.set_opacity(0)
+                m._kit_hidden = True
+            return
+        if hidden:
+            shown, m._kit_shown = m._kit_shown, None
+            m.become(shown)
+            m._kit_hidden = False
+        m.move_to(spot)
 
     @staticmethod
-    def _overlaps(c, w, h, panel):
-        return (abs(c[0] - panel.get_x()) < w + panel.width / 2 + 0.05 and
-                abs(c[1] - panel.get_y()) < h + panel.height / 2 + 0.05)
+    def _overlaps(c, w, h, other):
+        """Does a w x h half-size box at c overlap `other` (a bbox tuple or a mobject)?"""
+        ob = other if isinstance(other, tuple) else _bbox(other)
+        if not ob:
+            return False
+        return abs(c[0] - ob[0]) < w + ob[2] + 0.05 and abs(c[1] - ob[1]) < h + ob[3] + 0.05
 
     def _follow_label(self, arrow, text, color, font_size=30, mid: bool = False):
         lab = boxed(text, color=color, font_size=font_size, opacity=0.7)
-        lab.move_to(self._label_spot(arrow, lab, mid))
-        lab.add_updater(lambda m: m.move_to(self._label_spot(arrow, m, mid)))
+        self._place_label(lab, arrow, mid)
+        # (Manim also runs updaters on an animation's internal copies: act on the real label only)
+        lab.add_updater(lambda m: self._place_label(m, arrow, mid) if m is lab else None)
         self._labels.append(lab)
         return lab
 
     # -- public API
+    @_shown
     def show_matrix(self, A, name: str = "A", corner=UL):
         """Matrix panel in a top corner; column 1 green (where î lands), column 2 red (where ĵ lands)."""
         if self.matrix_panel is not None and self.matrix_panel in self.scene.mobjects:
@@ -314,19 +494,24 @@ class Plane2D(_Stage):
         self.matrix_panel = panel
         return panel
 
+    @_shown
     def panel(self, mob, corner=UR):
-        """Any extra numbers or text on a dark panel in a top corner (e.g. a worked calculation)."""
-        bg = SurroundingRectangle(mob, color=BLACK, fill_color=BLACK, fill_opacity=0.85, stroke_width=0, buff=0.18)
-        p = self._register_panel(self._place_panel(VGroup(bg, mob), corner))
+        """Any extra numbers or text on a dark panel in a top corner (e.g. a worked calculation).
+        Panels in the same corner stack downwards. FadeOut(mob) removes the panel with its box."""
+        p = self._make_panel(mob, corner)
         self.scene.play(FadeIn(p), run_time=0.6)
         return p
 
+    @_shown
     def add_vector(self, coords, label: str | None = None, color=YELLOW, show_coords: bool = True):
         """A tracked vector from the origin with a label that follows its tip and shows its CURRENT
         coordinates, e.g. 'v = [3, -1]' (updated after each transformation)."""
         a = self._arrow([0, 0], coords, color, 5)
         anims = [GrowArrow(a)]
-        if label is not None or show_coords:
+        label = str(label).strip() if label is not None else ""
+        if "=" in label:          # the label already states the coordinates: do not repeat them
+            show_coords = False
+        if label or show_coords:
             def text():
                 body = _vec_text(self._arrows[id(a)][2]) if show_coords else ""
                 return f"{label} = {body}" if (label and body) else (label or body)
@@ -334,12 +519,15 @@ class Plane2D(_Stage):
             state = {"text": text()}
 
             def upd(m):
+                if m is not lab:   # an animation's copy: leave it alone
+                    return
                 t = text()
                 if t != state["text"]:
                     state["text"] = t
                     m.become(boxed(t, color=color, font_size=28, opacity=0.75))
-                m.move_to(self._label_spot(a, m))
-            lab.move_to(self._label_spot(a, lab))
+                    m._kit_hidden, m._kit_shown = False, None
+                self._place_label(m, a)
+            self._place_label(lab, a)
             lab.add_updater(upd)
             self._labels.append(lab)
             a._kit_label = lab
@@ -347,6 +535,7 @@ class Plane2D(_Stage):
         self.scene.play(*anims, run_time=1.0)
         return a
 
+    @_shown
     def show_combination(self, arrow, run_time: float = 2.0):
         """Show a vector as x·î + y·ĵ: a green piece along î, then a red piece along ĵ, tip to tail.
         The pieces are tracked, so after a transformation they show x·(new î) + y·(new ĵ)."""
@@ -361,6 +550,7 @@ class Plane2D(_Stage):
         self.combination = (a1, a2, l1, l2)
         return a1, a2
 
+    @_shown
     def add_unit_square(self):
         """Translucent yellow square spanned by î and ĵ: its (signed) area becomes the determinant."""
         e1, e2 = self.M[:, 0], self.M[:, 1]
@@ -379,6 +569,7 @@ class Plane2D(_Stage):
         a, b = (v[1] - v[0]) / self.unit, (v[3] - v[0]) / self.unit
         return float(a[0] * b[1] - a[1] * b[0])
 
+    @_shown
     def show_determinant(self, corner=UR):
         """Live 'det = …' readout that updates DURING transformations (red when orientation flips)."""
         if self.square is None:
@@ -389,12 +580,16 @@ class Plane2D(_Stage):
             color = AREA_COLOR if d > 1e-3 else ("#FC6255" if d < -1e-3 else WHITE)
             note = "  (orientation flipped)" if d < -1e-3 else ("  (squished flat)" if abs(d) <= 1e-3 else "")
             return self._place_panel(boxed(f"det = {fmt(round(d, 2))}{note}", color=color, font_size=30,
-                                           opacity=0.85), corner)
+                                           opacity=0.85), corner, ignore=holder)
 
+        holder = []
         lab = make()
+        holder.append(lab)
         state = {"v": round(self.current_det(), 2)}
 
         def upd(m):
+            if m is not lab:   # an animation's copy: leave it alone
+                return
             v = round(self.current_det(), 2)
             if v != state["v"]:
                 state["v"] = v
@@ -405,6 +600,7 @@ class Plane2D(_Stage):
         self.det_readout = lab
         return lab
 
+    @_shown
     def transform_space(self, A, run_time: float = 3.0):
         """Apply the 2x2 matrix to the whole plane: grid, square, vectors and points all move together;
         î and ĵ end exactly on A's columns. Temporary labels are cleared first."""
@@ -412,6 +608,7 @@ class Plane2D(_Stage):
         self.scene.play(_SpaceMorph(self, A, run_time=run_time))
         self.scene.wait(0.6)
 
+    @_shown
     def label_landings(self):
         """Labels at the tips of î and ĵ saying where they landed (= the columns of the matrix)."""
         labs = []
@@ -427,6 +624,7 @@ class Plane2D(_Stage):
         self._note(*labs)
         return labs
 
+    @_shown
     def show_eigenvectors(self, A, count: int = 4):
         """Dashed span lines along A's real eigenvectors, each with a family of vectors on it.
         After transform_space(A) those vectors are still on their line, only stretched by λ.
@@ -446,8 +644,10 @@ class Plane2D(_Stage):
         self.eigen, anims = [], []
         for k, (lam, v) in enumerate(pairs):
             color = EIGEN_COLORS[k % len(EIGEN_COLORS)]
-            line = DashedLine(self.c2p(-30 * v), self.c2p(30 * v), color=color, stroke_width=2.5, dash_length=0.15)
-            anims.append(Create(line))  # static: an eigen line maps onto itself
+            L = self._screen_reach()
+            line = _dashed(self.c2p(-L * v), self.c2p(L * v), 0.15, stroke_color=color, stroke_width=2.5)
+            self._add_static(line)      # static: an eigen line maps onto itself
+            anims.append(Create(line))
             reach = float(np.clip(2.2 / max(abs(lam), 0.4), 1.0, 2.5))
             arrows = []
             for s in np.linspace(-reach, reach, count + 1):
@@ -461,6 +661,7 @@ class Plane2D(_Stage):
             self.scene.play(*anims, run_time=1.5)
         return [(lam, v) for lam, v, _, _ in self.eigen]
 
+    @_shown
     def label_eigen_stretch(self):
         """After the transformation: 'stretched by λ' labels next to each eigen line."""
         labs = []
@@ -468,28 +669,36 @@ class Plane2D(_Stage):
             word = "stretched" if abs(lam) >= 1 else "squished"
             text = f"{word} by {fmt(lam)}" if lam >= 0 else f"flipped and scaled by {fmt(lam)}"
             lab = boxed(text, color=EIGEN_COLORS[k % len(EIGEN_COLORS)], font_size=26)
-            direction = v if v[1] >= 0 else -v
-            spot = self.c2p(direction * 2.0) + 0.45 * UP
-            spot[0] = np.clip(spot[0], -6.9 + lab.width / 2, 6.9 - lab.width / 2)
-            spot[1] = np.clip(spot[1], SAFE_BOTTOM + lab.height / 2, _top_limit(self.scene) - lab.height / 2)
-            lab.move_to(spot)
+            d = v if v[1] >= 0 else -v                      # prefer the upper half of the line
+            d3 = np.array([d[0], d[1], 0.0])
+            n3 = np.array([-d[1], d[0], 0.0])
+            # beside the line (just clear of it), at several distances from the origin, both sides, both halves
+            off = 0.15 + abs(n3[0]) * lab.width / 2 + abs(n3[1]) * lab.height / 2
+            cands = [self.origin + s * d3 * r + side * n3 * off
+                     for r in (2.2, 3.0, 1.5, 3.8) for s in (1, -1) for side in (1, -1)]
+            lab.move_to(self._free_spot(lab, cands, extra=labs))
             labs.append(lab)
+            self._labels.append(lab)
         if labs:
             self.scene.play(*(FadeIn(m) for m in labs), run_time=0.8)
             self._note(*labs)
         return labs
 
+    @_shown
     def show_off_span(self, coords, color="#FF86C8"):
         """A vector together with its own static dashed span line: under a transformation it is not an
         eigenvector of, it visibly gets knocked off that line."""
         v = np.asarray(coords, float)
         u = v / np.linalg.norm(v)
-        line = DashedLine(self.c2p(-30 * u), self.c2p(30 * u), color=color, stroke_width=2, dash_length=0.12,
-                          stroke_opacity=0.7)
+        L = self._screen_reach()
+        line = _dashed(self.c2p(-L * u), self.c2p(L * u), 0.12, stroke_color=color, stroke_width=2,
+                       stroke_opacity=0.7)
+        self._add_static(line)
         a = self._arrow([0, 0], v, color, 5)
         self.scene.play(Create(line), GrowArrow(a), run_time=1.2)
         return a
 
+    @_shown
     def add_points(self, coords, color=YELLOW, radius: float = 0.06):
         """Many vectors shown as points (their tips); they move with the plane."""
         dots = VGroup()
@@ -501,6 +710,7 @@ class Plane2D(_Stage):
         self.scene.play(FadeIn(dots, lag_ratio=0.02), run_time=1.0)
         return dots
 
+    @_shown
     def compose(self, steps, verify: bool = True):
         """Apply several transformations in order, e.g. compose([(R, "R"), (S, "S")]) applies R then S.
         Shows the formula S·R with the matrix being applied highlighted, then (verify=True) undoes
@@ -531,6 +741,7 @@ class Plane2D(_Stage):
         self.scene.play(FadeOut(box))
         return product
 
+    @_shown
     def reset_space(self, target=None, run_time: float = 2.0):
         """Animate back to the original grid (or to an earlier state `target`)."""
         target = np.eye(2) if target is None else np.asarray(target, float)
@@ -552,6 +763,8 @@ class Space3D(_Stage):
         if not isinstance(scene, ThreeDScene):
             raise TypeError("Space3D needs the scene class to subclass ThreeDScene")
         self._init_common(scene)
+        self.matrices = [np.asarray(A, float) for A in matrices]
+        self.vectors = [np.asarray(v, float) for v in vectors]
         self.origin = np.zeros(3)
         pts = [np.eye(3)[i] for i in range(3)] + [np.asarray(v, float) for v in vectors]
         for A in matrices:
@@ -581,7 +794,7 @@ class Space3D(_Stage):
                                      stroke_width=2.4 if is_axis else 1.2, stroke_opacity=1 if is_axis else 0.45))
         self.grid = lattice
         self._shapes.add(lattice)
-        scene.add(self.background, self.layer)
+        self._add_to_back_of_scene()
         if animate:
             scene.play(Create(lattice, lag_ratio=0.005), run_time=2)
         self.axis_labels = VGroup()
@@ -610,6 +823,8 @@ class Space3D(_Stage):
         lab = Text(text, font_size=font_size, color=color)
 
         def upd(m):
+            if m is not lab:   # an animation's copy: leave it alone
+                return
             tip = self._tip(arrow)
             n = np.linalg.norm(tip - self.origin)
             m.move_to(tip + (0.32 * (tip - self.origin) / n if n > 1e-6 else np.array([0, 0, 0.3])))
@@ -617,6 +832,7 @@ class Space3D(_Stage):
         lab.add_updater(upd)
         self.scene.add_fixed_orientation_mobjects(lab)
         self.scene.remove(lab)
+        self._labels.append(lab)
         return lab
 
     @staticmethod
@@ -653,8 +869,11 @@ class Space3D(_Stage):
             return
         arrow.become(self._light_arrow(p0, p1, arrow._kit_color))
 
+    @_shown
     def show_matrix(self, A, name: str = "A", corner=UL):
         """Matrix panel pinned to a top corner; columns colored like î, ĵ, k̂."""
+        if self.matrix_panel is not None and self.matrix_panel in self.scene.mobjects:
+            self.scene.play(FadeOut(self.matrix_panel), run_time=0.4)
         panel = self._register_panel(self._place_panel(self._matrix_panel(A, name, [I_COLOR, J_COLOR, K_COLOR]),
                                                        corner))
         hud(self.scene, panel)
@@ -662,13 +881,15 @@ class Space3D(_Stage):
         self.matrix_panel = panel
         return panel
 
+    @_shown
     def panel(self, mob, corner=UR):
-        bg = SurroundingRectangle(mob, color=BLACK, fill_color=BLACK, fill_opacity=0.85, stroke_width=0, buff=0.18)
-        p = self._register_panel(self._place_panel(VGroup(bg, mob), corner))
+        """Worked numbers or text on a dark panel pinned to a top corner; FadeOut(mob) removes it."""
+        p = self._make_panel(mob, corner)
         hud(self.scene, p)
         self.scene.play(FadeIn(p), run_time=0.6)
         return p
 
+    @_shown
     def add_vector(self, coords, label: str | None = None, color=YELLOW):
         a = self._arrow(np.zeros(3), coords, color, 0.02)
         anims = [FadeIn(a)]
@@ -677,6 +898,7 @@ class Space3D(_Stage):
         self.scene.play(*anims, run_time=1.0)
         return a
 
+    @_shown
     def add_unit_cube(self):
         """Translucent yellow cube spanned by î, ĵ, k̂: its (signed) volume becomes the determinant."""
         faces = VGroup()
@@ -696,13 +918,14 @@ class Space3D(_Stage):
     def current_det(self) -> float:
         return float(np.linalg.det(self.M))
 
-    def _det_panel(self, corner):
+    def _det_panel(self, corner, replaces=()):
         d = self.current_det()
         note = "  (orientation flipped)" if d < -1e-3 else ("  (squished flat)" if abs(d) <= 1e-3 else "")
         lab = boxed(f"det = {fmt(round(d, 2))}{note}", color=AREA_COLOR if d > 1e-3 else "#FC6255",
                     font_size=28, opacity=0.85)
-        return self._place_panel(lab, corner)
+        return self._place_panel(lab, corner, ignore=replaces)
 
+    @_shown
     def show_determinant(self, corner=UR):
         """'det = …' readout pinned to a top corner (updated after each transformation)."""
         if self.square is None:
@@ -713,6 +936,7 @@ class Space3D(_Stage):
         self.det_readout = (lab, corner)
         return lab
 
+    @_shown
     def transform_space(self, A, run_time: float = 4.0, orbit: bool = True):
         """Apply the 3x3 matrix to all of space. The camera turns slowly meanwhile so depth stays visible."""
         self.clear_annotations()
@@ -724,12 +948,13 @@ class Space3D(_Stage):
         ro = getattr(self, "det_readout", None)
         if ro is not None:
             lab, corner = ro
-            new = self._register_panel(self._det_panel(corner))
+            new = self._register_panel(self._det_panel(corner, replaces=(lab,)))
             hud(self.scene, new)
             self.scene.play(FadeOut(lab), FadeIn(new), run_time=0.5)
             self.det_readout = (new, corner)
         self.scene.wait(0.5)
 
+    @_shown
     def label_landings(self):
         """Where î, ĵ, k̂ landed (= the columns of the matrix), listed on screen."""
         labs = []
@@ -744,10 +969,12 @@ class Space3D(_Stage):
         self._note(*labs)
         return labs
 
+    @_shown
     def orbit(self, degrees: float = 90, run_time: float = 5.0):
         """Turn the camera around the scene to show the 3-D shape."""
         self.scene.move_camera(theta=self.scene.camera.get_theta() + degrees * DEGREES, run_time=run_time)
 
+    @_shown
     def reset_space(self, run_time: float = 3.0):
         """Animate back to the original lattice."""
         if abs(np.linalg.det(self.M)) < 1e-9:

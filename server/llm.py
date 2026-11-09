@@ -1,6 +1,6 @@
 """OpenAI-compatible chat client with an automatic chain of free providers.
 
-Providers are tried in the order of config.PROVIDERS (Gemini → NVIDIA → Z.ai → OVHcloud).
+Providers are tried in the order of config.PROVIDERS (gpt-oss-120b → Gemini → NVIDIA → Qwen → GLM).
 When one answers "rate limited" / "quota exhausted" / server error / timeout, it is put on a
 cooldown and the next provider is used, so the site keeps working when one free quota runs out.
 """

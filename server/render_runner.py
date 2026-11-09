@@ -5,6 +5,9 @@
 Imports Manim, installs an audit hook (no processes except LaTeX, no sockets,
 no file writes outside work_dir, no reads of /proc, /sys or other users' data),
 then executes scene.py and renders the scene. Prints __VIDEO__=<path> on success.
+In "check" mode (6th argument) it runs the whole scene with Manim's skip mode: every line of code and
+every animation's start and end state run (so errors and the layout checks are found), but no frames
+are drawn or encoded. That takes seconds instead of minutes. Prints __CHECKED__ on success.
 """
 import os
 import sys
@@ -72,6 +75,7 @@ def install_hook(work: str, data_dir: str) -> None:
 
 def main() -> int:
     work, scene_name, quality, max_seconds, sessions_dir = sys.argv[1:6]
+    mode = sys.argv[6] if len(sys.argv) > 6 else "render"
     work = _norm(work)
     data_dir = _norm(os.path.dirname(os.path.abspath(sessions_dir)))
     max_seconds = float(max_seconds)
@@ -88,13 +92,22 @@ def main() -> int:
         config.media_dir = os.path.join(work, "media")
         config.quality = quality
         config.disable_caching = True
-        config.write_to_movie = True
+        config.write_to_movie = mode != "check"
         config.save_last_frame = False
         config.preview = False
         config.progress_bar = "none"
         config.verbosity = "WARNING"
         config.output_file = "video"
         config.format = None
+        # Speed (Manim >= 0.22): encode finished animations in background threads while the next
+        # ones render (the default waits for each one), and use a fast x264 preset ("animation" tune
+        # suits flat colors and sharp lines; crf 21 keeps the picture crisp).
+        for key, value in (("max_inflight_encoders", 4),
+                           ("video_encoder_options", {"crf": "21", "preset": "veryfast", "tune": "animation"})):
+            try:
+                setattr(config, key, value)
+            except Exception:
+                pass
 
     apply_config()
 
@@ -104,8 +117,11 @@ def main() -> int:
 
         def capped(self, *a, _orig=original, **kw):
             result = _orig(self, *a, **kw)
-            if getattr(self.renderer, "time", 0) > max_seconds:
+            t = getattr(self.renderer, "time", 0)
+            if t > max_seconds:
                 raise RuntimeError(f"Animation is longer than the {int(max_seconds)}s limit. Make it shorter.")
+            if mode != "check":
+                print(f"__T__={t:.1f}", flush=True)   # render progress (seconds of video done)
             return result
 
         setattr(Scene, name, capped)
@@ -262,12 +278,18 @@ def main() -> int:
             return 2
         apply_config()  # undo any config tweaks made at import time
         scene = cls()
+        if mode == "check":  # run everything, draw nothing
+            scene.renderer.skip_animations = True
+            scene.renderer._original_skipping_status = True
         scene.render()
         final_check()
         print(f"[lint] {lint_time[0]:.1f}s spent in layout checks", flush=True)
         if issues:
             print("__LAYOUT__=" + json.dumps(list(issues.values())[:12]), flush=True)
-        print(f"__VIDEO__={scene.renderer.file_writer.movie_file_path}", flush=True)
+        if mode == "check":
+            print(f"__CHECKED__ duration={getattr(scene.renderer, 'time', 0):.1f}", flush=True)
+        else:
+            print(f"__VIDEO__={scene.renderer.file_writer.movie_file_path}", flush=True)
         return 0
     except BaseException:
         tb = traceback.format_exc()
